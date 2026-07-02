@@ -334,9 +334,16 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(payload.get("diff"), str) and payload.get("diff"):
         files.append({"filename": payload.get("filename", "<diff>"), "patch": payload.get("diff")})
 
+    payload_changed_files = int(
+        payload.get("changed_files")
+        or pr.get("changed_files")
+        or payload.get("pull_request", {}).get("changed_files")
+        or 0
+    )
+
     # Preserve actual patch content so analyzers can inspect it.
     patch_text = "\n".join(str(item.get("patch", "")) for item in files if item.get("patch"))
-    changed_file_count = len(files)
+    changed_file_count = len(files) if files else payload_changed_files
     changed_line_count = sum(
         len([line for line in str(item.get("patch", "")).splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))])
         for item in files
@@ -348,6 +355,7 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
         "head_commit": head_commit,
         "changed_files": files,
         "changed_file_count": changed_file_count,
+        "payload_changed_file_count": payload_changed_files,
         "changed_line_count": changed_line_count,
         "patch_text": patch_text,
         "text": " ".join(
@@ -414,7 +422,7 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "pull_request_title": (context.get("pull_request") or {}).get("title"),
             "pull_request_body": (context.get("pull_request") or {}).get("body"),
             "commit_message": (context.get("head_commit") or {}).get("message"),
-            "repository": (context.get("payload") or {}).get("repository", {}).get("name"),
+            "repository": (context.get("repository") or {}).get("name"),
             "source": "pull_request" if context.get("pull_request") else "commit",
         },
     }

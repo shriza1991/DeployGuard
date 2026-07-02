@@ -34,8 +34,8 @@ reasoner = LLMReasoner()
 logger.info("agent-code-risk started, waiting for events...")
 for msg in consumer:
     event = msg.value
-    payload = event.get("payload", {})
-    correlation_id = event.get("correlation_id")
+    payload = event.get("payload", {}) if isinstance(event, dict) else {}
+    correlation_id = event.get("correlation_id") if isinstance(event, dict) else None
     logger.info("[code-risk] received event %s", correlation_id)
 
     try:
@@ -76,7 +76,7 @@ for msg in consumer:
             "confidence": 0.0,
             "reasons": ["Unexpected failure while analyzing the deployment change."],
             "recommendations": ["Inspect the service logs and retry the analysis."],
-            "metadata": {"error": str(exc)},
+            "metadata": {"error": str(exc), "payload_type": type(event).__name__},
             "llm": {
                 "summary": "Deterministic analysis was not completed due to an unexpected error.",
                 "additional_risks": [],
