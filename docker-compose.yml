@@ -38,7 +38,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
-      timeout: 10s
+      timeout: 20s
       retries: 5
 
   qdrant:
@@ -86,7 +86,7 @@ services:
       KAFKA_BROKER: kafka:9092
       LLM_PROVIDER: gemini
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
 
   agent-infra-risk:
     build: ./agent-infra-risk

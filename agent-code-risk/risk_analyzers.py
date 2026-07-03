@@ -195,12 +195,17 @@ class AuthenticationAnalyzer(BaseAnalyzer):
 class DatabaseMigrationAnalyzer(BaseAnalyzer):
     name = "database-migration"
 
+    _SQL_TOKENS = ("alter table", "create table", "drop column", "drop table", "create index")
+    _FILE_TOKENS = ("migration", "migrations", ".sql")
+    _META_TOKENS = ("migrate", "migration", "schema migration") + _SQL_TOKENS
+
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
+        # 1. Preferred: inspect file names and patch content.
         changed_files = context.get("changed_files", [])
         for file_entry in changed_files:
             file_name = str(file_entry.get("filename", "")).lower()
             patch = str(file_entry.get("patch", ""))
-            if any(token in file_name for token in ("migration", "migrations", ".sql")):
+            if any(token in file_name for token in self._FILE_TOKENS):
                 return AnalyzerFinding(
                     score_delta=15,
                     reason="Database migration or schema changes were detected.",
@@ -208,7 +213,7 @@ class DatabaseMigrationAnalyzer(BaseAnalyzer):
                     confidence=90,
                     metadata={"file": file_name},
                 )
-            if any(token in patch.lower() for token in ("alter table", "create table", "drop column", "drop table", "create index")):
+            if any(token in patch.lower() for token in self._SQL_TOKENS):
                 return AnalyzerFinding(
                     score_delta=15,
                     reason="The patch includes schema-altering SQL statements.",
@@ -216,17 +221,31 @@ class DatabaseMigrationAnalyzer(BaseAnalyzer):
                     confidence=90,
                     metadata={"file": file_name},
                 )
+        # 2. Fallback: check PR title, body, and commit message.
+        searchable_text = _get_searchable_text(context)
+        if any(token in searchable_text for token in self._META_TOKENS):
+            return AnalyzerFinding(
+                score_delta=15,
+                reason="Database migration or schema change keywords found in PR metadata or commit message.",
+                recommendation="Validate the migration plan, rollback path, and data preservation strategy.",
+                confidence=80,
+                metadata={"detection_method": "metadata_text"},
+            )
         return None
 
 
 class DangerousConfigurationAnalyzer(BaseAnalyzer):
     name = "dangerous-configuration"
 
+    _INFRA_FILE_TOKENS = ("docker", ".env", "k8s", "helm", "terraform", "nginx", "compose", "deployment", "ingress", "service")
+    _META_INFRA_TOKENS = ("dockerfile", "terraform", "deployment.yaml", "deployment.yml", "docker-compose", "helm", "kubernetes", "k8s", "nginx.conf")
+
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
+        # 1. Preferred: inspect patch lines in infrastructure files.
         for file_name, line in _iter_changed_lines(context):
             normalized = line.lower()
             normalized_name = file_name.lower()
-            if any(token in normalized_name for token in ("docker", ".env", "k8s", "helm", "terraform", "nginx", "compose", "deployment", "ingress", "service")):
+            if any(token in normalized_name for token in self._INFRA_FILE_TOKENS):
                 if any(token in normalized for token in CONFIG_TERMS):
                     return AnalyzerFinding(
                         score_delta=13,
@@ -235,6 +254,16 @@ class DangerousConfigurationAnalyzer(BaseAnalyzer):
                         confidence=80,
                         metadata={"file": file_name, "line": line.strip()},
                     )
+        # 2. Fallback: check PR title, body, and commit message.
+        searchable_text = _get_searchable_text(context)
+        if any(token in searchable_text for token in self._META_INFRA_TOKENS):
+            return AnalyzerFinding(
+                score_delta=13,
+                reason="Infrastructure configuration file names mentioned in PR metadata or commit message.",
+                recommendation="Review configuration changes for production blast radius, secrets, and compatibility.",
+                confidence=70,
+                metadata={"detection_method": "metadata_text"},
+            )
         return None
 
 
@@ -258,7 +287,17 @@ class LargeChangeAnalyzer(BaseAnalyzer):
 class DeletedValidationAnalyzer(BaseAnalyzer):
     name = "deleted-validation"
 
+    _META_REMOVED_TOKENS = (
+        "removed validation", "remove validation",
+        "removed middleware", "remove middleware",
+        "removed guard", "remove guard",
+        "removed check", "remove check",
+        "skip validation", "bypass validation",
+        "disable validation", "disabled validation",
+    )
+
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
+        # 1. Preferred: look for deleted lines (-) containing validation terms in patches.
         for file_entry in context.get("changed_files", []):
             patch = str(file_entry.get("patch", ""))
             for line in patch.splitlines():
@@ -273,6 +312,16 @@ class DeletedValidationAnalyzer(BaseAnalyzer):
                         confidence=85,
                         metadata={"file": file_entry.get("filename"), "line": line.strip()},
                     )
+        # 2. Fallback: check PR title, body, and commit message.
+        searchable_text = _get_searchable_text(context)
+        if any(token in searchable_text for token in self._META_REMOVED_TOKENS):
+            return AnalyzerFinding(
+                score_delta=14,
+                reason="Validation or guard logic removal described in PR metadata or commit message.",
+                recommendation="Restore or replace the removed validation logic and add regression tests.",
+                confidence=75,
+                metadata={"detection_method": "metadata_text"},
+            )
         return None
 
 
@@ -280,6 +329,7 @@ class SecretCredentialAnalyzer(BaseAnalyzer):
     name = "secrets"
 
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
+        # 1. Preferred: scan added lines (+) in patches with regex patterns.
         for file_entry in context.get("changed_files", []):
             patch = str(file_entry.get("patch", ""))
             for line in patch.splitlines():
@@ -294,13 +344,34 @@ class SecretCredentialAnalyzer(BaseAnalyzer):
                         confidence=95,
                         metadata={"file": file_entry.get("filename"), "line": content},
                     )
+        # 2. Fallback: apply the same regex patterns to the unified searchable text.
+        searchable_text = _get_searchable_text(context)
+        for pattern in SECRET_PATTERNS:
+            match = pattern.search(searchable_text)
+            if match:
+                return AnalyzerFinding(
+                    score_delta=18,
+                    reason="Credential-like value or secret detected in PR metadata or commit message.",
+                    recommendation="Rotate any exposed credentials and move secrets to a secure secret store.",
+                    confidence=85,
+                    metadata={"detection_method": "metadata_text", "match": match.group(0)[:80]},
+                )
         return None
 
 
 class CriticalInfrastructureAnalyzer(BaseAnalyzer):
     name = "critical-infrastructure"
 
+    # Subset of CRITICAL_INFRA_FILES that may appear in free-text metadata.
+    _META_INFRA_TOKENS = (
+        "dockerfile", "docker-compose", ".env", "nginx.conf",
+        "terraform", "main.tf", "deployment.yaml", "deployment.yml",
+        "service.yaml", "service.yml", "ingress.yaml", "ingress.yml",
+        "requirements.txt", "pyproject.toml", "package.json",
+    )
+
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
+        # 1. Preferred: check changed file names in the diff.
         for file_entry in context.get("changed_files", []):
             file_name = str(file_entry.get("filename", "")).lower()
             if any(token in file_name for token in CRITICAL_INFRA_FILES):
@@ -310,6 +381,17 @@ class CriticalInfrastructureAnalyzer(BaseAnalyzer):
                     recommendation="Have the change reviewed by an operations or platform owner before shipping.",
                     confidence=80,
                     metadata={"file": file_name},
+                )
+        # 2. Fallback: check PR title, body, and commit message.
+        searchable_text = _get_searchable_text(context)
+        for token in self._META_INFRA_TOKENS:
+            if token in searchable_text:
+                return AnalyzerFinding(
+                    score_delta=12,
+                    reason="Critical infrastructure file name mentioned in PR metadata or commit message.",
+                    recommendation="Have the change reviewed by an operations or platform owner before shipping.",
+                    confidence=70,
+                    metadata={"detection_method": "metadata_text", "token": token},
                 )
         return None
 
