@@ -8,23 +8,24 @@ class LLMReasonerTests(unittest.TestCase):
         response = _normalize_response(
             {
                 "summary": "Rollout should be cautious",
-                "additional_risks": ["Backwards compatibility risk"],
-                "deployment_recommendation": "Use canary deployment",
-                "confidence_adjustment": 0.08,
-                "risk_adjustment": 5,
-                "reasoning": "The change touches auth and infra config",
-            }
+                "risk_reasoning": ["Backwards compatibility risk"],
+                "recommendations": ["Use canary deployment"],
+                "confidence": 0.08,
+                "available": True,
+            },
+            provider_name="gemini",
         )
 
         self.assertTrue(response["available"])
         self.assertEqual(response["summary"], "Rollout should be cautious")
-        self.assertEqual(response["risk_adjustment"], 5)
-        self.assertEqual(response["confidence_adjustment"], 0.08)
+        self.assertEqual(response["confidence"], 0.08)
+        self.assertEqual(response["provider"], "gemini")
 
     def test_default_response_is_used_when_unavailable(self):
-        response = _default_response()
+        response = _default_response(provider_name="unavailable")
         self.assertFalse(response["available"])
-        self.assertIn("deterministic", response["summary"].lower())
+        self.assertEqual(response["provider"], "unavailable")
+        self.assertEqual(response["summary"], "")
 
 
 if __name__ == "__main__":

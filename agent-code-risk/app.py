@@ -42,25 +42,22 @@ for msg in consumer:
         analysis = analyze_code_risk(payload)
         llm_result = reasoner.reason_about_change(payload, analysis)
 
-        adjusted_score = max(0, min(100, analysis["score"] + llm_result.get("risk_adjustment", 0)))
-        adjusted_confidence = max(0.0, min(1.0, analysis["confidence"] / 100.0 + llm_result.get("confidence_adjustment", 0.0)))
-
         output = {
             "agent": "code-risk",
             "correlation_id": correlation_id,
-            "score": adjusted_score,
+            "score": analysis["score"],
             "severity": analysis["severity"],
-            "confidence": adjusted_confidence,
+            "confidence": max(0.0, min(1.0, analysis["confidence"] / 100.0)),
             "reasons": analysis["reasons"],
             "recommendations": analysis["recommendations"],
             "metadata": analysis["metadata"],
             "llm": {
-                "summary": llm_result.get("summary"),
-                "additional_risks": llm_result.get("additional_risks", []),
-                "deployment_recommendation": llm_result.get("deployment_recommendation"),
-                "reasoning": llm_result.get("reasoning"),
                 "provider": llm_result.get("provider"),
                 "available": llm_result.get("available", False),
+                "summary": llm_result.get("summary"),
+                "risk_reasoning": llm_result.get("risk_reasoning", []),
+                "recommendations": llm_result.get("recommendations", []),
+                "confidence": llm_result.get("confidence", 0.0),
             },
         }
         producer.send(OUTPUT_TOPIC, output)

@@ -155,6 +155,7 @@ class AuthenticationAnalyzer(BaseAnalyzer):
     name = "authentication"
 
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
+        # First, check patches for auth-related changes
         for file_name, line in _iter_changed_lines(context):
             normalized = line.lower()
             if not any(term in normalized for term in AUTH_TERMS):
@@ -167,6 +168,27 @@ class AuthenticationAnalyzer(BaseAnalyzer):
                     confidence=85,
                     metadata={"file": file_name, "line": line.strip()},
                 )
+        
+        # Fallback: check searchable text (PR title, body, commit message) for removed authentication
+        searchable_text = _get_searchable_text(context)
+        if any(pattern in searchable_text for pattern in [
+            "removed auth",
+            "removed authentication", 
+            "removed login",
+            "remove auth",
+            "remove authentication",
+            "remove login",
+            "disabled auth",
+            "disable authentication",
+        ]):
+            return AnalyzerFinding(
+                score_delta=14,
+                reason="Authentication logic appears to have been removed or disabled in this change.",
+                recommendation="Verify that authentication removal is intentional and that alternative security measures are in place.",
+                confidence=80,
+                metadata={"detection_method": "metadata_text"},
+            )
+        
         return None
 
 
@@ -290,6 +312,45 @@ class CriticalInfrastructureAnalyzer(BaseAnalyzer):
                     metadata={"file": file_name},
                 )
         return None
+
+
+def _get_searchable_text(context: dict[str, Any]) -> str:
+    """Assemble searchable text from patches, PR metadata, and commit message.
+    
+    Priority order:
+    1. Patch text (most reliable)
+    2. PR title and body
+    3. Commit message
+    4. File names
+    
+    Returns combined text for analyzers to search when patches are unavailable.
+    """
+    parts = []
+    
+    # Add patch text if available
+    for file_entry in context.get("changed_files", []):
+        patch = str(file_entry.get("patch", ""))
+        if patch:
+            parts.append(patch)
+        filename = str(file_entry.get("filename", ""))
+        if filename:
+            parts.append(filename)
+    
+    # Add PR metadata
+    pr = context.get("pull_request") or {}
+    if pr.get("title"):
+        parts.append(str(pr.get("title")))
+    if pr.get("body"):
+        parts.append(str(pr.get("body")))
+    
+    # Add commit message
+    head_commit = context.get("head_commit") or {}
+    if head_commit.get("message"):
+        parts.append(str(head_commit.get("message")))
+    
+    # Combine all text
+    combined = "\n".join(parts)
+    return combined.lower()
 
 
 def _iter_changed_lines(context: dict[str, Any]):
