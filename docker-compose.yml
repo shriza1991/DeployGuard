@@ -96,6 +96,9 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BROKER: kafka:9092
+      LLM_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
 
   agent-incident-history:
     build: ./agent-incident-history
