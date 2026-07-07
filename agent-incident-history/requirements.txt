@@ -1,2 +1,6 @@
 kafka-python
 requests
+fastapi
+uvicorn
+google-genai
+sentence-transformers
