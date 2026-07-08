@@ -1,0 +1,6 @@
+{
+  "name": "DeployGuard Dashboard",
+  "description": "Real-time security monitoring and deployment oversight.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

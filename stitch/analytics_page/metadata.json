@@ -1,0 +1,6 @@
+{
+  "name": "DeployGuard",
+  "description": "Enterprise Security Analytics Dashboard showing deployment security posture and agent performance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

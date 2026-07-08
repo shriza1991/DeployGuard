@@ -1,0 +1,42 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-brand-background: #13131b;
+  --color-brand-surface-low: #1b1b23;
+  --color-brand-surface-high: #292932;
+  --color-brand-surface-highest: #34343d;
+  --color-brand-on-surface: #e4e1ed;
+  --color-brand-on-surface-variant: #c7c4d7;
+  --color-brand-outline: #908fa0;
+  --color-brand-outline-variant: #464554;
+  --color-brand-primary: #c0c1ff;
+  --color-brand-secondary: #4edea3;
+  --color-brand-tertiary: #ffb95f;
+  --color-brand-error: #ffb4ab;
+}
+
+body {
+  background-color: var(--color-brand-background);
+  color: var(--color-brand-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #13131b;
+}
+::-webkit-scrollbar-thumb {
+  background: #34343d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #464554;
+}

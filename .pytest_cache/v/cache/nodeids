@@ -1,0 +1,11 @@
+[
+  "agent-incident-history/test_app.py::test_analyze_incident_history_handles_missing_history",
+  "agent-incident-history/test_app.py::test_analyze_incident_history_uses_similarity_and_history_signals",
+  "agent-incident-history/test_app.py::test_build_deployment_document_combines_searchable_fields",
+  "agent-incident-history/test_app.py::test_service_handles_embedding_failure",
+  "agent-incident-history/test_app.py::test_service_handles_qdrant_unavailable",
+  "agent-incident-history/test_app.py::test_service_scores_critical_rollback_history",
+  "agent-incident-history/test_embeddings.py::test_hash_embedding_is_deterministic_and_normalized",
+  "agent-incident-history/test_llm_reasoner.py::test_llm_reasoner_falls_back_after_provider_failure",
+  "agent-incident-history/test_vector_search.py::test_vector_search_filters_and_ranks_incidents"
+]
