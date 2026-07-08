@@ -114,6 +114,8 @@ services:
   aggregator:
     build: ./aggregator
     container_name: deployguard_aggregator
+    ports:
+      - "8002:8002"
     depends_on:
       kafka:
         condition: service_healthy
