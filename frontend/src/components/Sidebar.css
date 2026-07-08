@@ -1,0 +1,115 @@
+.sidebar {
+  width: 260px;
+  height: calc(100vh - 40px);
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+  z-index: 100;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px 20px 12px;
+  border-bottom: 1px solid var(--panel-border);
+  margin-bottom: 24px;
+}
+
+.brand-icon {
+  color: var(--accent-cyan);
+  width: 24px;
+  height: 24px;
+}
+
+.brand-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.02em;
+}
+
+.brand-text span {
+  color: var(--accent-cyan);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-grow: 1;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 13px;
+  transition: var(--transition-smooth);
+  border: 1px solid transparent;
+}
+
+.nav-item:hover {
+  background: rgba(192, 193, 255, 0.03);
+  color: #fff;
+}
+
+.nav-item.active {
+  background: rgba(192, 193, 255, 0.08);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(192, 193, 255, 0.15);
+  font-weight: 600;
+}
+
+.nav-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-footer {
+  padding-top: 16px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.platform-tag {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  text-align: center;
+  background: var(--panel-bg);
+  padding: 6px 12px;
+  border-radius: var(--radius-badge);
+  border: 1px solid var(--panel-border);
+}
+
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 80px;
+    padding: 24px 8px;
+  }
+  
+  .brand-text, .nav-item span, .platform-tag {
+    display: none;
+  }
+  
+  .sidebar-brand {
+    justify-content: center;
+    padding-bottom: 16px;
+  }
+  
+  .nav-item {
+    justify-content: center;
+    padding: 12px;
+  }
+}
