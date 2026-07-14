@@ -1,3 +1,4 @@
+
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -32,3 +33,19 @@ class FinalDecision(BaseModel):
     reasons: List[str]
     recommendations: List[str]
     generated_at: str
+
+# Request models used by POST endpoints
+class CreateIncidentRequest(BaseModel):
+    title: str
+    description: str
+    severity: str
+    outcome: str
+    service: str
+    environment: str
+    root_cause: Optional[str] = None
+    rollback: Optional[bool] = None
+    tags: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class SimilaritySearchRequest(BaseModel):
+    text: str

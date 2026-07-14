@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../api/client';
-import type { DeploymentEvent } from '../api/client';
+import {
+  getDeployment,
+  type DeploymentDetail,
+} from '../api/deployments';
+import {type DeploymentSummary, listDeployments} from '../api/dashboard';
 import { 
   Clock, 
   Settings, 
@@ -53,7 +56,8 @@ const HISTORICAL_INCIDENTS = [
 ];
 
 export const Deployments: React.FC = () => {
-  const [deployments, setDeployments] = useState<DeploymentEvent[]>([]);
+  const [deployments, setDeployments] = useState<DeploymentSummary[]>([]);
+  const [selectedDeployment, setSelectedDeployment] = useState<DeploymentDetail | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,31 +77,54 @@ export const Deployments: React.FC = () => {
   const [isSavingAlert, setIsSavingAlert] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const fetchDeployments = async () => {
-    try {
-      const data = await api.getDeployments();
-      setDeployments(data);
-      if (data.length > 0 && !selectedId) {
-        setSelectedId(data[0].correlation_id);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
+const fetchDeployments = async () => {
+  try {
+    const response = await listDeployments({
+      page: 1,
+      page_size: 100,
+    });
+
+    setDeployments(response.items);
+
+    if (response.items.length > 0 && !selectedId) {
+      setSelectedId(response.items[0].correlation_id);
     }
-  };
+  } catch (e) {
+    console.error(e);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
     fetchDeployments();
   }, []);
 
-  const filteredDeployments = deployments.filter(dep => 
-    dep.repository.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    dep.commit_message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    dep.correlation_id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
-  const selectedDep = deployments.find(d => d.correlation_id === selectedId);
+  const fetchDeploymentDetail = async (correlationId: string) => {
+  try {
+    const detail = await getDeployment(correlationId);
+    setSelectedDeployment(detail);
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+useEffect(() => {
+  if (selectedId) {
+    fetchDeploymentDetail(selectedId);
+  }
+}, [selectedId]);
+
+  const filteredDeployments = deployments.filter(dep =>
+  dep.repository.toLowerCase().includes(searchQuery.toLowerCase()) ||
+  dep.correlation_id.toLowerCase().includes(searchQuery.toLowerCase())
+);
+
+  const selectedDep = selectedDeployment;
+  const selectedSummary = deployments.find(
+  d => d.correlation_id === selectedId
+);
 
   const formatDate = (isoStr?: string) => {
     if (!isoStr) return '';
@@ -124,7 +151,7 @@ export const Deployments: React.FC = () => {
   };
 
   // Helper to map dynamic agents to Stitch card definitions
-  const getAgentsList = (dep: DeploymentEvent) => {
+  const getAgentsList = (dep: DeploymentDetail) => {
     if (!dep.agents) return [];
     return Object.entries(dep.agents).map(([key, data]: [string, any]) => {
       const name = AGENT_DISPLAY_NAMES[key] || key.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase());
@@ -157,8 +184,11 @@ export const Deployments: React.FC = () => {
   };
 
   // Helper to get pipeline steps based on deployment status
-  const getPipelineSteps = (dep: DeploymentEvent) => {
-    const isPending = dep.status === 'pending';
+  const getPipelineSteps = (
+  dep: DeploymentDetail,
+  status: 'pending' | 'complete'
+) => {
+    const isPending = status === 'pending';
     const shortSha = dep.correlation_id.substring(0, 7);
     
     return [
@@ -254,7 +284,7 @@ export const Deployments: React.FC = () => {
                     <span className="item-repo font-mono">{dep.repository}</span>
                     <span className="item-time font-mono">{formatDate(dep.generated_at).split(',')[0]}</span>
                   </div>
-                  <h3 className="item-title">{dep.commit_message}</h3>
+                  <h3 className="item-title">{dep.repository}</h3>
                   <div className="item-footer">
                     <span className={`verdict-tag-small ${dep.decision?.toLowerCase() || 'pending'}`}>
                       {dep.decision || 'PENDING'}
@@ -335,13 +365,18 @@ export const Deployments: React.FC = () => {
                   <div className="timeline-backline" id="timeline_backline">
                     <div 
                       className="timeline-progress-line" 
-                      style={{ width: selectedDep.status === 'pending' ? '84%' : '100%' }}
+                     style={{
+  width: selectedSummary?.status === 'pending' ? '84%' : '100%',
+}}
                     />
                   </div>
 
                   {/* Step Sequence Wrapper */}
                   <div className="pipeline-steps-row" id="pipeline_steps_row">
-                    {getPipelineSteps(selectedDep).map((step) => {
+                    {getPipelineSteps(
+                                          selectedDep,
+                                               selectedSummary?.status ?? 'complete'
+).map((step) => {
                       const isSelected = selectedTimelineStep === step.id;
                       
                       let stepClass = "status-pending";
@@ -357,6 +392,7 @@ export const Deployments: React.FC = () => {
                         stepClass = "status-pending";
                         nodeIcon = <HelpCircle className="node-icon" />;
                       }
+                     
 
                       return (
                         <button
@@ -394,13 +430,16 @@ export const Deployments: React.FC = () => {
                       <span className="context-stage-name">STAGE: {selectedTimelineStep.toUpperCase()}</span>
                       <span className="context-separator">|</span>
                       <span className="context-details-text">
-                        {getPipelineSteps(selectedDep).find(s => s.id === selectedTimelineStep)?.details}
+                        {getPipelineSteps(
+    selectedDep,
+    selectedSummary?.status ?? 'complete'
+).find(s => s.id === selectedTimelineStep)?.details}
                       </span>
                     </div>
                   </div>
-                  {getPipelineSteps(selectedDep).find(s => s.id === selectedTimelineStep)?.timestamp && (
+                  {getPipelineSteps(selectedDep, deployments.find(d => d.correlation_id === selectedDep.correlation_id)?.status ?? 'complete').find(s => s.id === selectedTimelineStep)?.timestamp && (
                     <div className="context-timestamp">
-                      Processed at: <span className="timestamp-value">{getPipelineSteps(selectedDep).find(s => s.id === selectedTimelineStep)?.timestamp}</span>
+                      Processed at: <span className="timestamp-value">{getPipelineSteps(selectedDep, deployments.find(d => d.correlation_id === selectedDep.correlation_id)?.status ?? 'complete').find(s => s.id === selectedTimelineStep)?.timestamp}</span>
                     </div>
                   )}
                 </div>

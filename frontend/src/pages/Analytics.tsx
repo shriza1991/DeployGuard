@@ -35,10 +35,30 @@ import {
   Area
 } from 'recharts';
 import './Analytics.css';
+import {
+  getAnalyticsSummary,
+  getAnalyticsVolume,
+  getAnalyticsDecisions,
+  getAnalyticsBlocks,
+  exportAnalytics,
+} from '../api/analytics';
+
+import type {
+  AnalyticsSummaryResponse,
+  AnalyticsVolumeResponse,
+  AnalyticsDecisionsResponse,
+  AnalyticsBlocksResponse,
+} from '../api/analytics';
+
+import type { AnalyticsBlockRecord } from '../api/analytics';
 
 export const Analytics: React.FC = () => {
   const [deployments, setDeployments] = useState<DeploymentEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState<AnalyticsSummaryResponse | null>(null);
+  const [decisionSummary, setDecisionSummary] = useState<AnalyticsDecisionsResponse | null>(null);
+  const [volumeSummary, setVolumeSummary] = useState<AnalyticsVolumeResponse | null>(null);
+  const [blocksSummary, setBlocksSummary] = useState<AnalyticsBlocksResponse | null>(null);
 
   // Stitch dynamic states
   const [timeRange, setTimeRange] = useState<'7d' | '14d' | '30d' | '90d'>('30d');
@@ -47,7 +67,7 @@ export const Analytics: React.FC = () => {
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'CRITICAL' | 'HIGH' | 'MEDIUM'>('ALL');
   
   // Modals & Triggers
-  const [selectedBlock, setSelectedBlock] = useState<DeploymentEvent | null>(null);
+  const [selectedBlock, setSelectedBlock] = useState<AnalyticsBlockRecord | null>(null);
   const [showNewDeploymentModal, setShowNewDeploymentModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanStep, setScanStep] = useState(0);
@@ -71,8 +91,36 @@ export const Analytics: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchDeployments();
-  }, []);
+  fetchDeployments(); // keeps sparkline/histogram working
+}, []);
+
+useEffect(() => {
+  fetchAnalytics();
+}, [timeRange, severityFilter, searchQuery]);
+
+  const fetchAnalytics = async () => {
+  try {
+    const [summaryData, volumeData, decisionData, blocksData] =
+      await Promise.all([
+        getAnalyticsSummary({ range: timeRange }),
+        getAnalyticsVolume({ range: timeRange }),
+        getAnalyticsDecisions({ range: timeRange }),
+        getAnalyticsBlocks({
+          range: timeRange,
+          severity:
+            severityFilter === "ALL" ? undefined : severityFilter,
+          search: searchQuery || undefined,
+        }),
+      ]);
+
+    setSummary(summaryData);
+    setVolumeSummary(volumeData);
+    setDecisionSummary(decisionData);
+    setBlocksSummary(blocksData);
+  } catch (err) {
+    console.error("Analytics fetch failed", err);
+  }
+};
 
   // Filter deployments by selected timeRange
   const timeFilteredDeployments = useMemo(() => {
@@ -87,27 +135,27 @@ export const Analytics: React.FC = () => {
   }, [deployments, timeRange]);
 
   // Compute key metric cards
-  const totalAnalyzed = timeFilteredDeployments.length;
-  const avgRiskScore = totalAnalyzed > 0 
-    ? Math.round(timeFilteredDeployments.reduce((acc, d) => acc + (d.overall_score || 0), 0) / totalAnalyzed) 
-    : 0;
-  const avgConfidence = totalAnalyzed > 0 
-    ? (timeFilteredDeployments.reduce((acc, d) => acc + (d.overall_confidence || 0.9), 0) / totalAnalyzed * 100).toFixed(1) + "%"
-    : "0.0%";
-  const totalBlocked = timeFilteredDeployments.filter(d => d.decision === 'BLOCK').length;
+const totalAnalyzed = summary?.totalAnalyzed ?? 0;
+
+const avgRiskScore = summary?.avgRiskScore ?? 0;
+
+const avgConfidence =
+  summary ? `${summary.avgConfidence}%` : "0.0%";
+
+const totalBlocked = summary?.totalBlocked ?? 0;
 
   // Pie chart counts
-  const safeCount = timeFilteredDeployments.filter(d => d.decision === 'SAFE').length;
-  const reviewCount = timeFilteredDeployments.filter(d => d.decision === 'REVIEW').length;
-  const blockCount = timeFilteredDeployments.filter(d => d.decision === 'BLOCK').length;
+  const safeCount = decisionSummary?.distribution.SAFE ?? 0;
+const reviewCount = decisionSummary?.distribution.REVIEW ?? 0;
+const blockCount = decisionSummary?.distribution.BLOCK ?? 0;
 
-  const pieData = useMemo(() => {
-    return [
-      { name: 'SAFE', value: safeCount || 12, color: '#4edea3' },
-      { name: 'REVIEW', value: reviewCount || 3, color: '#ffb95f' },
-      { name: 'BLOCK', value: blockCount || 2, color: '#ffb4ab' }
-    ];
-  }, [safeCount, reviewCount, blockCount]);
+const pieData = useMemo(() => {
+  return [
+    { name: "SAFE", value: safeCount, color: "#4edea3" },
+    { name: "REVIEW", value: reviewCount, color: "#ffb95f" },
+    { name: "BLOCK", value: blockCount, color: "#ffb4ab" },
+  ];
+}, [safeCount, reviewCount, blockCount]);
 
   // Safe rate calculations
   const safeRate = useMemo(() => {
@@ -116,36 +164,18 @@ export const Analytics: React.FC = () => {
   }, [safeCount, reviewCount, blockCount]);
 
   // Volume Bar Chart Data
-  const volumeData = useMemo(() => {
-    const dateGroups: Record<string, { date: string, Safe: number, Blocked: number }> = {};
+ const volumeData = useMemo(() => {
+  if (!volumeSummary) return [];
+
+  return volumeSummary.data.map((item) => ({
+    date: item.date,
+    Safe: item.safe,
+    Blocked: item.blocked,
+  }));
+}, [volumeSummary]);
     
     // Sort and group actual time-filtered deployments
-    timeFilteredDeployments.forEach(d => {
-      if (!d.generated_at) return;
-      const label = new Date(d.generated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      if (!dateGroups[label]) {
-        dateGroups[label] = { date: label, Safe: 0, Blocked: 0 };
-      }
-      if (d.decision === 'BLOCK') {
-        dateGroups[label].Blocked += 1;
-      } else {
-        dateGroups[label].Safe += 1;
-      }
-    });
-
-    const list = Object.values(dateGroups).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    if (list.length > 0) return list;
-
-    // Static Fallback to look nice if database is empty
-    return [
-      { date: '01 Oct', Safe: 450, Blocked: 35 },
-      { date: '04 Oct', Safe: 380, Blocked: 20 },
-      { date: '08 Oct', Safe: 620, Blocked: 45 },
-      { date: '12 Oct', Safe: 540, Blocked: 38 },
-      { date: '15 Oct', Safe: 710, Blocked: 52 },
-      { date: '19 Oct', Safe: 490, Blocked: 28 }
-    ];
-  }, [timeFilteredDeployments]);
+    
 
   // Sparkline confidence trend area data
   const confidenceTrendData = useMemo(() => {
@@ -225,48 +255,41 @@ export const Analytics: React.FC = () => {
 
   // Filter high risk blocks for the recent table
   const filteredBlocks = useMemo(() => {
-    return timeFilteredDeployments.filter(d => {
-      // Match query
-      const query = searchQuery.toLowerCase().trim();
-      const matchesSearch = query === '' ||
-        d.repository.toLowerCase().includes(query) ||
-        d.commit_message.toLowerCase().includes(query) ||
-        (d.decision && d.decision.toLowerCase().includes(query));
-
-      if (!matchesSearch) return false;
-
-      // Severity filters
-      const score = d.overall_score || 0;
-      if (severityFilter === 'CRITICAL') return score >= 90;
-      if (severityFilter === 'HIGH') return score >= 75 && score < 90;
-      if (severityFilter === 'MEDIUM') return score >= 50 && score < 75;
-
-      // Default: show blocked ones or high scores
-      return d.decision === 'BLOCK' || score >= 50;
-    });
-  }, [timeFilteredDeployments, searchQuery, severityFilter]);
+  return blocksSummary?.items ?? [];
+}, [blocksSummary]);
 
   // Toast notifier
   const triggerToast = (msg: string) => {
     setCsvToast(msg);
     setTimeout(() => setCsvToast(null), 4000);
   };
+const handleExportCSV = async () => {
+  try {
+    const blob = await exportAnalytics({
+      range: timeRange,
+      format: "csv",
+    });
 
-  const handleExportCSV = () => {
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + ["Timestamp,Repository,Risk Score,Verdict,Commit Message"].join(",") + "\n"
-      + timeFilteredDeployments.map(d => `"${formatDate(d.generated_at)}","${d.repository}",${d.overall_score},"${d.decision}","${d.commit_message.replace(/"/g, '""')}"`).join("\n");
-    
-    const encodedUri = encodeURI(csvContent);
+    const url = window.URL.createObjectURL(blob);
+
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `deployguard_security_analytics_${timeRange}.csv`);
+    link.href = url;
+    link.download = `deployguard_security_analytics_${timeRange}.csv`;
+
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
 
-    triggerToast(`Successfully generated and downloaded analytics export for ${timeRange}!`);
-  };
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+
+    triggerToast(
+      `Successfully downloaded analytics export for ${timeRange}!`
+    );
+  } catch (err) {
+    console.error(err);
+    triggerToast("Failed to export analytics.");
+  }
+};
 
   const handleStartScanSimulation = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -904,15 +927,15 @@ export const Analytics: React.FC = () => {
                         className="table-row"
                         onClick={() => setSelectedBlock(block)}
                       >
-                        <td className="time-cell font-mono">{formatDate(block.generated_at)}</td>
+                        <td className="time-cell font-mono">{formatDate(block.time)}</td>
                         <td className="repo-cell font-mono">{block.repository}</td>
                         <td className="score-cell">
                           <span className="risk-badge font-mono border-error">
                             <span className="dot bg-error" />
-                            {block.overall_score}/100
+                            {block.risk_score}/100
                           </span>
                         </td>
-                        <td className="threat-cell">{block.commit_message}</td>
+                        <td className="threat-cell">{block.primary_threat || "High-Risk Deployment Blocked"}</td>
                         <td className="action-cell text-right" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => setSelectedBlock(block)}
@@ -969,7 +992,7 @@ export const Analytics: React.FC = () => {
                   DeployGuard Threat Intervention
                 </span>
                 <h3 className="modal-title font-sans">
-                  {selectedBlock.commit_message}
+                  {selectedBlock.primary_threat || "High-Risk Deployment Blocked"}
                 </h3>
               </div>
               <button onClick={() => setSelectedBlock(null)} className="modal-close-x-btn">
@@ -981,7 +1004,7 @@ export const Analytics: React.FC = () => {
             <div className="modal-meta-grid font-mono border-outline-variant">
               <div className="meta-box">
                 <p className="meta-lbl">Risk Level</p>
-                <p className="meta-val text-error font-bold">{selectedBlock.overall_score}/100</p>
+                <p className="meta-val text-error font-bold">{selectedBlock.risk_score}/100</p>
               </div>
               <div className="meta-box">
                 <p className="meta-lbl">Repository</p>
@@ -989,7 +1012,7 @@ export const Analytics: React.FC = () => {
               </div>
               <div className="meta-box">
                 <p className="meta-lbl">Timestamp</p>
-                <p className="meta-val font-bold">{formatDate(selectedBlock.generated_at)}</p>
+                <p className="meta-val font-bold">{formatDate(selectedBlock.time)}</p>
               </div>
             </div>
 
@@ -1000,41 +1023,61 @@ export const Analytics: React.FC = () => {
                 Detailed Security Report
               </h4>
               <p className="desc-text font-sans">
-                {selectedBlock.summary || "This deployment has triggered gate blocks on all safety analyzers due to insecure credential variables and exposed inbound traffic configurations."}
+                {selectedBlock.details || "This deployment has triggered gate blocks on all safety analyzers due to insecure credential variables and exposed inbound traffic configurations."}
               </p>
             </div>
 
             {/* Sub-Agent Individual Risk Scoring */}
-            <div className="modal-agent-score-section border-outline-variant">
-              <h4 className="section-title font-mono">Sub-Agent Assessment Breakdown</h4>
-              <div className="agent-breakdown-scores font-mono">
-                <div>
-                  <p className="agent-label">Code Risk</p>
-                  <p className={`score-value font-bold ${selectedBlock.agents?.['code-risk']?.score > 50 ? 'text-error' : 'text-green'}`}>
-                    {selectedBlock.agents?.['code-risk']?.score || 15}%
-                  </p>
-                </div>
-                <div>
-                  <p className="agent-label">Infra Risk</p>
-                  <p className={`score-value font-bold ${selectedBlock.agents?.['infra-risk']?.score > 50 ? 'text-error' : 'text-green'}`}>
-                    {selectedBlock.agents?.['infra-risk']?.score || 25}%
-                  </p>
-                </div>
-                <div>
-                  <p className="agent-label">Incident History</p>
-                  <p className={`score-value font-bold ${selectedBlock.agents?.['incident-history']?.score > 50 ? 'text-error' : 'text-green'}`}>
-                    {selectedBlock.agents?.['incident-history']?.score || 10}%
-                  </p>
-                </div>
-              </div>
-            </div>
+          <div className="modal-agent-score-section border-outline-variant">
+  <h4 className="section-title font-mono">Sub-Agent Assessment Breakdown</h4>
 
+  <div className="agent-breakdown-scores font-mono">
+    <div>
+      <p className="agent-label">Code Risk</p>
+      <p
+        className={`score-value font-bold ${
+          selectedBlock.agent_scores.code_risk > 50
+            ? "text-error"
+            : "text-green"
+        }`}
+      >
+        {selectedBlock.agent_scores.code_risk}%
+      </p>
+    </div>
+
+    <div>
+      <p className="agent-label">Infra Risk</p>
+      <p
+        className={`score-value font-bold ${
+          selectedBlock.agent_scores.infra_risk > 50
+            ? "text-error"
+            : "text-green"
+        }`}
+      >
+        {selectedBlock.agent_scores.infra_risk}%
+      </p>
+    </div>
+
+    <div>
+      <p className="agent-label">Incident History</p>
+      <p
+        className={`score-value font-bold ${
+          selectedBlock.agent_scores.incident_risk > 50
+            ? "text-error"
+            : "text-green"
+        }`}
+      >
+        {selectedBlock.agent_scores.incident_risk}%
+      </p>
+    </div>
+  </div>
+</div>
             {/* Recommendations */}
             <div className="modal-remedy-section">
               <h4 className="remedy-title font-mono">Remediation Steps Required</h4>
               <ul className="remedy-list font-sans">
-                {selectedBlock.reasons && selectedBlock.reasons.length > 0 ? (
-                  selectedBlock.reasons.map((rec, i) => (
+                {selectedBlock.recommendations && selectedBlock.recommendations.length > 0 ? (
+                  selectedBlock.recommendations.map((rec, i) => (
                     <li key={i} className="remedy-item">
                       <ChevronRight className="bullet-chevron text-primary" />
                       <span>{rec}</span>

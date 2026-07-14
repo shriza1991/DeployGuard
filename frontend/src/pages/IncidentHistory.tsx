@@ -1,17 +1,35 @@
-import React, { useState } from 'react';
-import { api, MOCK_INCIDENTS } from '../api/client';
-import type { MockIncident } from '../api/client';
+import React, { useEffect, useState } from 'react';
+import {
+  listIncidents,
+  searchSimilarIncidents,
+  type IncidentRecord,
+  type SimilarIncidentMatch,
+} from '../api/incidents';
 import { Search, Calculator, ShieldAlert, CheckCircle2, HelpCircle, History, AlertTriangle, AlertCircle, Info } from 'lucide-react';
 import './IncidentHistory.css';
 
 export const IncidentHistory: React.FC = () => {
-  const [incidents] = useState<MockIncident[]>(MOCK_INCIDENTS);
+  const [incidents, setIncidents] = useState<IncidentRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   
   // Playground states
   const [playgroundText, setPlaygroundText] = useState('feat: Add database migrations and disable oauth validation temporarily');
   const [calculating, setCalculating] = useState(false);
-  const [similarityResults, setSimilarityResults] = useState<MockIncident[]>([]);
+  const [similarityResults, setSimilarityResults] = useState<SimilarIncidentMatch[]>([]);
+
+
+  const fetchIncidents = async () => {
+  try {
+    const response = await listIncidents();
+    setIncidents(response.items);
+  } catch (err) {
+    console.error('Failed to load incidents:', err);
+  }
+};
+
+  useEffect(() => {
+    fetchIncidents();
+  }, []);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
@@ -27,14 +45,12 @@ export const IncidentHistory: React.FC = () => {
   const runSimilarityPlayground = async (e: React.FormEvent) => {
     e.preventDefault();
     setCalculating(true);
-    try {
-      const results = await api.calculateSimilarity(playgroundText);
-      setSimilarityResults(results);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setCalculating(false);
-    }
+    
+      const response = await searchSimilarIncidents({
+  text: playgroundText,
+});
+
+setSimilarityResults(response.matches);
   };
 
   return (

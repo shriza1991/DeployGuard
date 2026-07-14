@@ -8,9 +8,13 @@ class RiskDecisionPublisher:
     def __init__(self, settings: Settings):
         self.topic = settings.output_topic
         self.producer = KafkaProducer(
-            bootstrap_servers=[settings.kafka_broker],
-            value_serializer=lambda v: json.dumps(v).encode("utf-8")
-        )
+    bootstrap_servers=[settings.kafka_broker],
+    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+    retries=20,
+    retry_backoff_ms=3000,
+    request_timeout_ms=60000,
+    api_version_auto_timeout_ms=60000,
+)
         logger.info(f"Initialized Kafka producer for topic: {self.topic}")
 
     def publish(self, correlation_id: str, decision: Dict[str, Any]) -> None:
