@@ -1,89 +1,141 @@
+import io
+import math
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from fastapi.responses import JSONResponse
 from redis_store import RedisStore
 from config import get_settings
-from typing import Optional, List, Dict
 from models import (
     CreateIncidentRequest,
     SimilaritySearchRequest,
-    LLMResult,
-    AgentResult,
-    FinalDecision,
 )
 
+
 router = APIRouter()
-@router.get("/test123")
-def test123():
-    return {"ok": True}
 redis_store = RedisStore(get_settings())
 
-# Health endpoint
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _merge_meta(decision: Dict[str, Any], meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge webhook metadata fields into a decision dict (non-destructive)."""
+    if not meta:
+        return decision
+    enriched = dict(decision)
+    for field in ("repository", "branch", "commit_sha", "commit_message",
+                  "author", "pull_request_title", "pull_request_body", "pr_user_login", "action"):
+        if field in meta and field not in enriched:
+            enriched[field] = meta[field]
+        elif field in meta:
+            # Prefer meta value if decision has empty/None
+            if not enriched.get(field):
+                enriched[field] = meta[field]
+    return enriched
+
+
+def _parse_range_days(range_str: Optional[str]) -> int:
+    """Convert an AnalyticsRange string to integer days."""
+    mapping = {"7d": 7, "14d": 14, "30d": 30, "90d": 90}
+    return mapping.get(range_str or "7d", 7)
+
+
+def _decisions_in_range(decisions: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
+    """Filter decisions to those generated within the last `days` days."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    result = []
+    for d in decisions:
+        generated_at = d.get("generated_at", "")
+        try:
+            dt = datetime.fromisoformat(generated_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt >= cutoff:
+                result.append(d)
+        except (ValueError, TypeError):
+            # Include decisions with unparseable timestamps rather than losing them
+            result.append(d)
+    return result
+
+
+def _compute_metrics(decisions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute aggregate metrics from a list of final decisions."""
+    total = len(decisions)
+    safe = sum(1 for d in decisions if d.get("decision") == "SAFE")
+    review = sum(1 for d in decisions if d.get("decision") == "REVIEW")
+    blocked = sum(1 for d in decisions if d.get("decision") == "BLOCK")
+
+    if total > 0:
+        avg_risk = round(sum(d.get("overall_score", 0) for d in decisions) / total, 1)
+        avg_conf = round(sum(d.get("overall_confidence", 0.0) for d in decisions) / total, 4)
+        safe_pct = round((safe / total) * 100, 1)
+        blocked_pct = round((blocked / total) * 100, 1)
+    else:
+        avg_risk = 0.0
+        avg_conf = 0.0
+        safe_pct = 0.0
+        blocked_pct = 0.0
+
+    return {
+        "total": total,
+        "safe": safe,
+        "review": review,
+        "blocked": blocked,
+        "avgRisk": avg_risk,
+        "avgConfidence": avg_conf,
+        "safePercentage": safe_pct,
+        "blockedPercentage": blocked_pct,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
 @router.get("/health")
 def health_check():
     return {"status": "healthy"}
 
+
+# ---------------------------------------------------------------------------
 # Decision endpoint
+# ---------------------------------------------------------------------------
+
 @router.get("/decision/{correlation_id}")
 def get_decision(correlation_id: str):
-    if correlation_id == "blk001":
-        return {
-            "correlation_id": correlation_id,
-            "overall_score": 85,
-            "overall_confidence": 92.5,
-            "decision": "BLOCK",
-            "severity": "HIGH",
-            "summary": "High risk detected in payments-api",
-            "reasons": [
-                "Potential security vulnerability found"
-            ],
-            "recommendations": [
-                "Conduct a thorough security review"
-            ],
-            "generated_at": "2026-07-13T11:20:00Z",
-            "agents": {
-                "code_risk": {
-                    "agent": "code_risk",
-                    "correlation_id": correlation_id,
-                    "score": 85,
-                    "severity": "HIGH",
-                    "confidence": 93.4,
-                    "reasons": [
-                        "Authentication middleware removed"
-                    ],
-                    "recommendations": [
-                        "Restore authentication checks"
-                    ],
-                    "metadata": {},
-                    "similar_incidents": [],
-                    "llm": None
-                },
-                "infra_risk": {
-                    "agent": "infra_risk",
-                    "correlation_id": correlation_id,
-                    "score": 78,
-                    "severity": "MEDIUM",
-                    "confidence": 89.1,
-                    "reasons": [
-                        "Security group allows broad ingress"
-                    ],
-                    "recommendations": [
-                        "Restrict inbound access"
-                    ],
-                    "metadata": {},
-                    "similar_incidents": [],
-                    "llm": None
-                }
-            }
-        }
+    """Return the final aggregated decision for a correlation_id, or 404 if not found."""
+    decision = redis_store.get_final_decision(correlation_id)
+    if decision:
+        meta = redis_store.get_deployment_meta(correlation_id)
+        return _merge_meta(decision, meta)
 
-    ...
+    # Check if aggregation is still in progress (agent results exist but no final decision yet)
+    partial_results = redis_store.get_agent_results(correlation_id)
+    if partial_results:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "pending",
+                "correlation_id": correlation_id,
+                "collected_agents": list(partial_results.keys()),
+                "message": "Deployment risk aggregation is in progress.",
+            }
+        )
+
     raise HTTPException(
         status_code=404,
         detail=f"No deployment found or decision expired for correlation_id: {correlation_id}",
     )
 
-# Deployments list
+
+# ---------------------------------------------------------------------------
+# Deployments
+# ---------------------------------------------------------------------------
+
 @router.get("/deployments")
 def list_deployments(
     project: Optional[str] = None,
@@ -92,301 +144,177 @@ def list_deployments(
     page: int = 1,
     page_size: int = 10,
 ):
-    # Dummy static data matching frontend contract
-    items = [
-        {
-            "correlation_id": "abc123",
-            "repository": "DeployGuard",
-            "branch": "main",
-            "decision": "SAFE",
-            "overall_score": 18,
-            "overall_confidence": 96.4,
-            "severity": "LOW",
-            "generated_at": "2026-07-13T10:30:00Z",
-            "status": "complete",
-        },
-        {
-            "correlation_id": "xyz789",
-            "repository": "auth-service",
-            "branch": "feature/login",
-            "decision": "REVIEW",
-            "overall_score": 57,
-            "overall_confidence": 89.1,
-            "severity": "MEDIUM",
-            "generated_at": "2026-07-13T09:45:00Z",
-            "status": "pending",
-        },
-        {
-            "correlation_id": "blk001",
-            "repository": "payments-api",
-            "branch": "release/v1",
-            "decision": "BLOCK",
-            "overall_score": 85,
-            "overall_confidence": 92.5,
-            "severity": "HIGH",
-            "generated_at": "2026-07-13T11:20:00Z",
-            "status": "complete",
-        },
-    ]
-    # Apply optional filters (simple stub)
-    filtered = items
+    """Return a paginated list of deployment summaries from Redis."""
+    all_decisions = redis_store.list_final_decisions()
+
+    # Enrich each decision with its webhook metadata
+    enriched: List[Dict[str, Any]] = []
+    for d in all_decisions:
+        cid = d.get("correlation_id", "")
+        meta = redis_store.get_deployment_meta(cid) if cid else None
+        enriched.append(_merge_meta(d, meta))
+
+    # --- Filters ---
+    filtered = enriched
+
     if decision:
-        filtered = [d for d in filtered if d["decision"] == decision]
+        decision_upper = decision.upper()
+        filtered = [d for d in filtered if d.get("decision", "").upper() == decision_upper]
+
+    if project:
+        project_lower = project.lower()
+        filtered = [d for d in filtered if project_lower in (d.get("repository") or "").lower()]
+
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            filtered = [
+                d for d in filtered
+                if _parse_generated_at(d.get("generated_at", "")) >= since_dt
+            ]
+        except (ValueError, TypeError):
+            pass  # Invalid since format — ignore filter
+
     total = len(filtered)
     start = (page - 1) * page_size
     end = start + page_size
+
+    # Map to DeploymentSummary shape
+    items = []
+    for d in filtered[start:end]:
+        items.append({
+            "correlation_id": d.get("correlation_id", ""),
+            "repository": d.get("repository", "unknown"),
+            "branch": d.get("branch", ""),
+            "decision": d.get("decision"),
+            "overall_score": d.get("overall_score"),
+            "overall_confidence": d.get("overall_confidence"),
+            "severity": d.get("severity"),
+            "generated_at": d.get("generated_at"),
+            "status": "complete",
+        })
+
     return {
-        "items": filtered[start:end],
+        "items": items,
+        "total": total,
         "page": page,
         "page_size": page_size,
-        "total": total,
     }
-    
-    
+
+
+def _parse_generated_at(value: str) -> datetime:
+    """Parse generated_at string; return epoch on failure."""
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
 @router.get("/deployments/metrics")
-def get_deployment_metrics(
-    project: str | None = None,
-    period: str | None = "24h"
+def get_metrics(
+    project: Optional[str] = None,
+    period: Optional[str] = None,
 ):
-    return {
-        "total": 42,
-        "safe": 28,
-        "review": 8,
-        "blocked": 6,
-        "avgRisk": 54,
-        "avgConfidence": 91,
-        "safePercentage": 66.7,
-        "blockedPercentage": 14.3,
-        "totalProgress": 18,
-        "totalTrend": "up",
-        "riskLevel": "MEDIUM"
-    }
+    """Return aggregate deployment metrics computed from Redis."""
+    all_decisions = redis_store.list_final_decisions()
+
+    # Filter by period if given
+    if period:
+        days = _parse_range_days(period)
+        all_decisions = _decisions_in_range(all_decisions, days)
+
+    # Filter by project
+    if project:
+        project_lower = project.lower()
+        # We need meta to filter by repo name; load meta per decision
+        filtered = []
+        for d in all_decisions:
+            cid = d.get("correlation_id", "")
+            meta = redis_store.get_deployment_meta(cid) if cid else None
+            repo = (meta or {}).get("repository", "") or d.get("repository", "")
+            if project_lower in repo.lower():
+                filtered.append(d)
+        all_decisions = filtered
+
+    return _compute_metrics(all_decisions)
 
 
-
-# Single deployment detail
 @router.get("/deployments/{correlation_id}")
 def get_deployment(correlation_id: str):
-    # Reuse static data from list_deployments for consistency
-    deployment_map = {
-       "abc123": {
-    "correlation_id": "abc123",
-    "repository": "DeployGuard",
-    "branch": "main",
+    """Return the full deployment detail for a correlation_id, enriched with webhook metadata."""
+    decision = redis_store.get_final_decision(correlation_id)
+    if not decision:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Deployment not found for correlation_id: {correlation_id}",
+        )
+    meta = redis_store.get_deployment_meta(correlation_id)
+    enriched = _merge_meta(decision, meta)
+    # Ensure status field is present
+    enriched.setdefault("status", "complete")
+    return enriched
 
-    "commit_message": "Refactor deployment metrics aggregation and improve API response caching",
-    "author": "Sarah Williams",
-    "pull_request_title": "Optimize deployment metrics pipeline",
-    "pull_request_body": "Improves dashboard performance by optimizing metrics aggregation and introducing response caching. No security-sensitive changes detected.",
 
-    "decision": "SAFE",
-    "overall_score": 18,
-    "overall_confidence": 96.4,
-    "severity": "LOW",
-    "generated_at": "2026-07-13T10:30:00Z",
-    "status": "complete",
+# ---------------------------------------------------------------------------
+# Deployment pipeline timeline (static structure — timestamps where available)
+# ---------------------------------------------------------------------------
 
-    "summary": "Deployment approved. All AI agents reported low deployment risk with no significant security concerns.",
-
-    "reasons": [
-        "No high-risk code modifications detected.",
-        "Infrastructure configuration remained unchanged.",
-        "No similar historical incidents found."
-    ],
-
-    "recommendations": [
-        "Deployment can proceed.",
-        "Continue standard post-deployment monitoring."
-    ],
-
-    "agents": {
-        "code-risk": {
-            "score": 12,
-            "confidence": 0.98,
-            "reasons": [
-                "Static analysis found no critical vulnerabilities.",
-                "Code quality checks passed successfully."
-            ],
-            "recommendations": [
-                "No action required."
-            ]
-        },
-        "infra-risk": {
-            "score": 20,
-            "confidence": 0.95,
-            "reasons": [
-                "Infrastructure configuration is secure.",
-                "No risky Terraform or Docker changes detected."
-            ],
-            "recommendations": [
-                "No action required."
-            ]
-        },
-        "incident-history": {
-            "score": 15,
-            "confidence": 0.97,
-            "reasons": [
-                "No historical incidents closely match this deployment."
-            ],
-            "recommendations": [
-                "Proceed with deployment."
-            ]
-        }
-    }
-},
-        "blk001": {
-    "correlation_id": "blk001",
-    "repository": "payments-api",
-    "branch": "release/v1",
-
-    "commit_message": "Fix payment authorization race condition",
-    "author": "Jane Doe",
-    "pull_request_title": "Harden payment authorization flow",
-    "pull_request_body": "Adds retry logic and validation improvements.",
-
-    "decision": "BLOCK",
-    "overall_score": 85,
-    "overall_confidence": 92.5,
-    "severity": "HIGH",
-    "generated_at": "2026-07-13T11:20:00Z",
-    "status": "complete",
-
-    "summary": "Deployment blocked due to multiple high-risk findings from AI agents.",
-
-    "reasons": [
-        "Authentication validation removed.",
-        "Critical IAM permission changes detected."
-    ],
-
-    "recommendations": [
-        "Restore authentication middleware.",
-        "Review IAM policy before deployment."
-    ],
-
-    "agents": {
-        "code-risk": {
-            "score": 82,
-            "confidence": 0.94,
-            "reasons": [
-                "Authentication logic removed."
-            ],
-            "recommendations": [
-                "Restore authentication middleware."
-            ]
-        },
-        "infra-risk": {
-            "score": 88,
-            "confidence": 0.91,
-            "reasons": [
-                "Terraform exposes privileged resource."
-            ],
-            "recommendations": [
-                "Restrict infrastructure permissions."
-            ]
-        },
-        "incident-history": {
-            "score": 76,
-            "confidence": 0.89,
-            "reasons": [
-                "Similar deployment previously caused outage."
-            ],
-            "recommendations": [
-                "Review incident INC-104 before deployment."
-            ]
-        }
-    }
-}
-    ,
-    "xyz789": {
-    "correlation_id": "xyz789",
-    "repository": "auth-service",
-    "branch": "feature/login",
-
-    "commit_message": "Temporarily disable MFA validation for login flow debugging",
-    "author": "Alex Johnson",
-    "pull_request_title": "Improve login authentication diagnostics",
-    "pull_request_body": "Adds additional authentication logging and temporarily bypasses MFA validation for debugging in the staging environment.",
-
-    "decision": "REVIEW",
-    "overall_score": 57,
-    "overall_confidence": 89.1,
-    "severity": "MEDIUM",
-    "generated_at": "2026-07-13T09:45:00Z",
-    "status": "pending",
-
-    "summary": "Deployment requires manual review due to authentication changes and elevated infrastructure risk.",
-
-    "reasons": [
-        "Authentication validation logic modified.",
-        "Infrastructure configuration changed.",
-        "Historical incidents indicate similar deployments required rollback."
-    ],
-
-    "recommendations": [
-        "Perform manual security review before deployment.",
-        "Validate authentication flow in staging.",
-        "Review infrastructure configuration changes."
-    ],
-
-    "agents": {
-        "code-risk": {
-            "score": 61,
-            "confidence": 0.91,
-            "reasons": [
-                "Authentication validation logic was modified.",
-                "Login flow security checks require verification."
-            ],
-            "recommendations": [
-                "Restore production authentication safeguards.",
-                "Increase unit test coverage for authentication."
-            ]
-        },
-        "infra-risk": {
-            "score": 53,
-            "confidence": 0.87,
-            "reasons": [
-                "Infrastructure configuration changes detected.",
-                "Deployment modifies ingress rules."
-            ],
-            "recommendations": [
-                "Review Terraform changes before deployment.",
-                "Verify network policies."
-            ]
-        },
-        "incident-history": {
-            "score": 58,
-            "confidence": 0.89,
-            "reasons": [
-                "Similar authentication deployments previously caused production instability."
-            ],
-            "recommendations": [
-                "Review incident INC-104 before deployment.",
-                "Run additional regression tests."
-            ]
-        }
-    }
-},
-    }
-    if correlation_id in deployment_map:
-        return deployment_map[correlation_id]
-    raise HTTPException(status_code=404, detail="Deployment not found")
-
-# Deployment timeline
 @router.get("/deployments/{correlation_id}/timeline")
 def get_deployment_timeline(correlation_id: str):
-    # Static timeline for demo purposes
+    decision = redis_store.get_final_decision(correlation_id)
+    generated_at = decision.get("generated_at") if decision else None
+
     return {
         "correlation_id": correlation_id,
         "stages": [
-            {"id": "trigger", "label": "Trigger", "status": "completed", "timestamp": "2026-07-13T10:30:00Z", "details": "Webhook received"},
-            {"id": "code-analysis", "label": "Code Analysis", "status": "completed", "timestamp": "2026-07-13T10:30:05Z", "details": "Static analysis completed"},
-            {"id": "infra-scan", "label": "Infra Scan", "status": "pending", "timestamp": None, "details": "Waiting for infra agent"},
-            {"id": "incident-check", "label": "Incident Check", "status": "pending", "timestamp": None, "details": "Waiting for history agent"},
-            {"id": "decision", "label": "Decision", "status": "pending", "timestamp": None, "details": "Aggregating results"},
+            {
+                "id": "trigger",
+                "label": "Trigger",
+                "status": "completed",
+                "timestamp": None,
+                "details": "Webhook received by Gateway",
+            },
+            {
+                "id": "code-analysis",
+                "label": "Code Analysis",
+                "status": "completed" if decision else "pending",
+                "timestamp": None,
+                "details": "Code Risk Agent analysis complete" if decision else "Waiting for agent",
+            },
+            {
+                "id": "infra-scan",
+                "label": "Infra Scan",
+                "status": "completed" if decision else "pending",
+                "timestamp": None,
+                "details": "Infra Risk Agent scan complete" if decision else "Waiting for agent",
+            },
+            {
+                "id": "incident-check",
+                "label": "Incident Check",
+                "status": "completed" if decision else "pending",
+                "timestamp": None,
+                "details": "Incident History Agent lookup complete" if decision else "Waiting for agent",
+            },
+            {
+                "id": "decision",
+                "label": "Decision",
+                "status": "completed" if decision else "pending",
+                "timestamp": generated_at,
+                "details": f"Decision: {decision.get('decision')}" if decision else "Aggregating results",
+            },
         ],
     }
-    
+
+
+# ---------------------------------------------------------------------------
 # Agent status
+# ---------------------------------------------------------------------------
+
 @router.get("/agents/status")
 def get_agent_status():
     return {
@@ -397,7 +325,11 @@ def get_agent_status():
         ]
     }
 
-# Incidents list (paginated) – matches frontend PaginatedResponse<IncidentRecord>
+
+# ---------------------------------------------------------------------------
+# Incidents
+# ---------------------------------------------------------------------------
+
 @router.get("/incidents")
 def list_incidents(
     service: Optional[str] = None,
@@ -431,10 +363,9 @@ def list_incidents(
     end = start + page_size
     return {"items": filtered[start:end], "page": page, "page_size": page_size, "total": total}
 
-# Single incident detail
+
 @router.get("/incidents/{incident_id}")
 def get_incident(incident_id: str):
-    # Return static incident matching the ID if known
     if incident_id == "INC-104":
         return {
             "incident_id": "INC-104",
@@ -452,7 +383,7 @@ def get_incident(incident_id: str):
         }
     raise HTTPException(status_code=404, detail="Incident not found")
 
-# Create incident (POST)
+
 @router.post("/incidents")
 def create_incident(request: CreateIncidentRequest):
     incident = {
@@ -471,7 +402,7 @@ def create_incident(request: CreateIncidentRequest):
     }
     return {"incident": incident}
 
-# Similarity search (POST)
+
 @router.post("/incidents/similarity")
 def similarity_search(request: SimilaritySearchRequest):
     matches = [
@@ -504,42 +435,133 @@ def similarity_search(request: SimilaritySearchRequest):
     ]
     return {"query": request.text, "matches": matches}
 
-# Analytics summary – return numeric values
+
+# ---------------------------------------------------------------------------
+# Analytics — all computed live from Redis
+# ---------------------------------------------------------------------------
+
+def _load_all_with_meta() -> List[Dict[str, Any]]:
+    """Load all final decisions and merge their webhook metadata in one pass."""
+    decisions = redis_store.list_final_decisions()
+    enriched = []
+    for d in decisions:
+        cid = d.get("correlation_id", "")
+        meta = redis_store.get_deployment_meta(cid) if cid else None
+        enriched.append(_merge_meta(d, meta))
+    return enriched
+
+
 @router.get("/analytics/summary")
-def get_analytics_summary():
+def get_analytics_summary(range: Optional[str] = None):
+    days = _parse_range_days(range)
+    all_decisions = redis_store.list_final_decisions()
+
+    current = _decisions_in_range(all_decisions, days)
+    prior = _decisions_in_range(all_decisions, days * 2)
+    # prior window = previous period (not overlapping current)
+    prior_only = [d for d in prior if d not in current]
+
+    def _trend(curr_val: float, prev_val: float) -> str:
+        if curr_val > prev_val:
+            return "up"
+        elif curr_val < prev_val:
+            return "down"
+        return "flat"
+
+    curr_m = _compute_metrics(current)
+    prev_m = _compute_metrics(prior_only) if prior_only else _compute_metrics([])
+
     return {
-        "totalAnalyzed": 43,
-        "avgRiskScore": 55,
-        "avgConfidence": 75,
-        "totalBlocked": 10,
+        "totalAnalyzed": curr_m["total"],
+        "avgRiskScore": curr_m["avgRisk"],
+        "avgConfidence": curr_m["avgConfidence"],
+        "totalBlocked": curr_m["blocked"],
         "trends": {
-            "totalAnalyzed": {"value": 44, "trend": "up"},
-            "avgRiskScore": {"value": 55, "trend": "down"},
-            "avgConfidence": {"value": 75, "trend": "up"},
-            "totalBlocked": {"value": 10, "trend": "down"},
+            "totalAnalyzed": {
+                "value": curr_m["total"],
+                "trend": _trend(curr_m["total"], prev_m["total"]),
+            },
+            "avgRiskScore": {
+                "value": curr_m["avgRisk"],
+                "trend": _trend(curr_m["avgRisk"], prev_m["avgRisk"]),
+            },
+            "avgConfidence": {
+                "value": curr_m["avgConfidence"],
+                "trend": _trend(curr_m["avgConfidence"], prev_m["avgConfidence"]),
+            },
+            "totalBlocked": {
+                "value": curr_m["blocked"],
+                "trend": _trend(curr_m["blocked"], prev_m["blocked"]),
+            },
         },
     }
 
-# Analytics volume
+
 @router.get("/analytics/volume")
-def get_analytics_volume():
+
+
+def get_analytics_volume(time_range: Optional[str] = None):
+    days = _parse_range_days(time_range)
+    all_decisions = _decisions_in_range(redis_store.list_final_decisions(), days)
+
+    # Group by UTC date
+    by_date: Dict[str, Dict[str, int]] = defaultdict(
+        lambda: {"safe": 0, "review": 0, "blocked": 0}
+    )
+
+    for d in all_decisions:
+        try:
+            dt = datetime.fromisoformat(d.get("generated_at", ""))
+            date_str = dt.strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            continue
+
+        decision = d.get("decision", "")
+
+        if decision == "SAFE":
+            by_date[date_str]["safe"] += 1
+        elif decision == "REVIEW":
+            by_date[date_str]["review"] += 1
+        elif decision == "BLOCK":
+            by_date[date_str]["blocked"] += 1
+
+    # Fill missing days
+    now = datetime.now(timezone.utc)
+    data = []
+
+    for i in range(days - 1, -1, -1):
+        date_str = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        counts = by_date.get(
+            date_str,
+            {"safe": 0, "review": 0, "blocked": 0},
+        )
+        data.append(
+            {
+                "date": date_str,
+                **counts,
+            }
+        )
+
     return {
-        "range": "7d",
-        "data": [
-            {"date": "2026-07-07", "safe": 120, "review": 20, "blocked": 10},
-            {"date": "2026-07-08", "safe": 130, "review": 15, "blocked": 5},
-        ],
+        "time_range": time_range or "7d",
+        "data": data,
     }
 
-# Analytics decisions distribution
+
 @router.get("/analytics/decisions")
-def get_analytics_decisions():
-    return {
-        "range": "7d",
-        "distribution": {"SAFE": 120, "REVIEW": 20, "BLOCK": 10},
-    }
+def get_analytics_decisions(range: Optional[str] = None):
+    days = _parse_range_days(range)
+    all_decisions = _decisions_in_range(redis_store.list_final_decisions(), days)
 
-# Analytics blocks – recent high‑risk blocked deployments
+    distribution = {"SAFE": 0, "REVIEW": 0, "BLOCK": 0}
+    for d in all_decisions:
+        decision = d.get("decision", "").upper()
+        if decision in distribution:
+            distribution[decision] += 1
+
+    return {"range": range or "7d", "distribution": distribution}
+
+
 @router.get("/analytics/blocks")
 def get_analytics_blocks(
     range: Optional[str] = None,
@@ -548,48 +570,102 @@ def get_analytics_blocks(
     page: int = 1,
     page_size: int = 10,
 ):
-    # Dummy block records aligned with the deployment data above
-    all_items = [
-        {
-            "correlation_id": "blk001",
-            "time": "2026-07-13T11:20:00Z",
-            "repository": "payments-api",
-            "risk_score": 85,
-            "primary_threat": "HIGH",
-            "decision": "BLOCK",
-            "agent_scores": {"code_risk": 85, "infra_risk": 78, "incident_risk": 82},
-            "details": "Deployment blocked due to high overall risk identified across multiple AI agents.",
-            "recommendations": [
-                "Fix authentication logic.",
-                "Harden infrastructure configuration.",
-                "Review similar incidents before redeployment.",
-            ],
-        }
-    ]
-    # Apply simple filters (stub)
-    filtered = all_items
+    days = _parse_range_days(range)
+    all_decisions = _load_all_with_meta()
+    in_range = _decisions_in_range(all_decisions, days)
+
+    # Filter to BLOCK decisions only
+    blocks = [d for d in in_range if d.get("decision", "").upper() == "BLOCK"]
+
+    # Apply severity filter (maps to the overall severity field)
     if severity:
-        filtered = [i for i in filtered if i["primary_threat"] == severity]
+        severity_upper = severity.upper()
+        blocks = [b for b in blocks if (b.get("severity") or "").upper() == severity_upper]
+
+    # Apply search filter (matches repository name)
     if search:
-        filtered = [i for i in filtered if search.lower() in i["repository"].lower()]
-    total = len(filtered)
+        search_lower = search.lower()
+        blocks = [b for b in blocks if search_lower in (b.get("repository") or "").lower()]
+
+    total = len(blocks)
     start = (page - 1) * page_size
     end = start + page_size
+
+    items = []
+    for b in blocks[start:end]:
+        agents = b.get("agents") or {}
+
+        def _agent_score(name: str) -> int:
+            agent_data = agents.get(name) or {}
+            return int(agent_data.get("score", 0))
+
+        items.append({
+            "correlation_id": b.get("correlation_id", ""),
+            "time": b.get("generated_at", ""),
+            "repository": b.get("repository", "unknown"),
+            "risk_score": b.get("overall_score", 0),
+            "primary_threat": b.get("severity", "UNKNOWN"),
+            "decision": b.get("decision", "BLOCK"),
+            "agent_scores": {
+                "code_risk": _agent_score("code-risk"),
+                "infra_risk": _agent_score("infra-risk"),
+                "incident_risk": _agent_score("incident-history"),
+            },
+            "details": b.get("summary", ""),
+            "recommendations": b.get("recommendations", []),
+        })
+
     return {
-        "items": filtered[start:end],
+        "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
     }
 
-# Analytics export — CSV download
+
 @router.get("/analytics/export")
 def export_analytics(format: str = "csv", range: Optional[str] = None):
-    """Return analytics data as CSV. Currently returns a simple static CSV matching summary metrics."""
-    import io
-    csv_header = "totalAnalyzed,avgRiskScore,avgConfidence,totalBlocked\n"
-    csv_data = f"{44},{55},{75},{10}\n"
-    csv_content = csv_header + csv_data
-    return StreamingResponse(io.StringIO(csv_content), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=analytics.csv"})
+    """Export analytics data as CSV computed from live Redis decisions."""
+    days = _parse_range_days(range)
+    all_decisions = _decisions_in_range(redis_store.list_final_decisions(), days)
+    metrics = _compute_metrics(all_decisions)
+
+    csv_lines = [
+        "correlation_id,repository,decision,overall_score,overall_confidence,severity,generated_at"
+    ]
+    all_with_meta = _load_all_with_meta()
+    in_range = _decisions_in_range(all_with_meta, days)
+    for d in in_range:
+        row = ",".join([
+            _csv_escape(d.get("correlation_id", "")),
+            _csv_escape(d.get("repository", "")),
+            _csv_escape(d.get("decision", "")),
+            str(d.get("overall_score", 0)),
+            str(d.get("overall_confidence", 0.0)),
+            _csv_escape(d.get("severity", "")),
+            _csv_escape(d.get("generated_at", "")),
+        ])
+        csv_lines.append(row)
+
+    csv_content = "\n".join(csv_lines) + "\n"
+    return StreamingResponse(
+        io.StringIO(csv_content),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=analytics.csv"},
+    )
 
 
+def _csv_escape(value: str) -> str:
+    """Wrap CSV field in quotes if it contains commas or quotes."""
+    if "," in value or '"' in value:
+        return '"' + value.replace('"', '""') + '"'
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Legacy test endpoint (keep to avoid breaking any existing callers)
+# ---------------------------------------------------------------------------
+
+@router.get("/test123")
+def test123():
+    return {"ok": True}

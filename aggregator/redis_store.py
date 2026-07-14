@@ -1,6 +1,6 @@
 import json
 import redis
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from config import Settings
 from logger import logger
 
@@ -57,3 +57,37 @@ class RedisStore:
         self.client.delete(f"deployment:{correlation_id}")
         self.client.delete(f"timeout:{correlation_id}")
         logger.info(f"Cleared deployment temp data for correlation_id {correlation_id}")
+
+    def list_final_decisions(self) -> List[Dict[str, Any]]:
+        """Scan Redis for all stored final decisions, sorted newest first."""
+        decisions = []
+        for key in self.client.scan_iter("decision:*"):
+            raw = self.client.get(key)
+            if raw:
+                try:
+                    decisions.append(json.loads(raw))
+                except Exception:
+                    pass
+        decisions.sort(
+            key=lambda d: d.get("generated_at", ""),
+            reverse=True
+        )
+        return decisions
+
+    # --- Webhook metadata helpers ---
+
+    def save_deployment_meta(self, correlation_id: str, meta: Dict[str, Any]) -> None:
+        """Store webhook-originated metadata (repo, author, PR title, etc.) alongside a correlation_id.
+        TTL is set to 7200s (2 hours) — longer than the decision TTL of 3600s.
+        """
+        key = f"meta:{correlation_id}"
+        self.client.set(key, json.dumps(meta), ex=7200)
+        logger.info(f"Saved deployment meta for correlation_id {correlation_id}")
+
+    def get_deployment_meta(self, correlation_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve webhook metadata for a correlation_id. Returns None if not found."""
+        key = f"meta:{correlation_id}"
+        raw = self.client.get(key)
+        if raw:
+            return json.loads(raw.decode("utf-8"))
+        return None

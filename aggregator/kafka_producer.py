@@ -13,7 +13,7 @@ class RiskDecisionPublisher:
     retries=20,
     retry_backoff_ms=3000,
     request_timeout_ms=60000,
-    api_version_auto_timeout_ms=60000,
+    
 )
         logger.info(f"Initialized Kafka producer for topic: {self.topic}")
 

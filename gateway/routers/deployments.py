@@ -1,37 +1,27 @@
 from fastapi import APIRouter
 
+# NOTE: These gateway-level stubs exist only so the gateway router includes this
+# file without crashing. The real /deployments and /deployments/metrics endpoints
+# are served by the Aggregator (port 8002), not the Gateway (port 8000).
+# The frontend proxies /api/aggregator/* → aggregator:8002.
+
 router = APIRouter(prefix="/deployments", tags=["Deployments"])
+
 
 @router.get("/")
 def get_deployments():
-    return [
-        {
-            "id": "DEP-101",
-            "repository": "DeployGuard",
-            "branch": "main",
-            "decision": "SAFE",
-            "risk_score": 12,
-            "confidence": 98.5,
-            "timestamp": "2026-07-13T10:30:00Z"
-        },
-        {
-            "id": "DEP-102",
-            "repository": "DeployGuard",
-            "branch": "feature/auth",
-            "decision": "REVIEW",
-            "risk_score": 48,
-            "confidence": 91.2,
-            "timestamp": "2026-07-13T09:45:00Z"
-        }
-    ]
+    """Stub — real data is served by the Aggregator at GET /deployments."""
+    return []
 
-    @router.get("/metrics")
-    def get_metrics():
-        return {
-            "total": 150,
-            "safe": 100,
-            "review": 20,
-            "blocked": 4,
-            "avgRisk": 38,
-            "avgConfidence": 94.2,
-        }
+
+@router.get("/metrics")
+def get_metrics():
+    """Stub — real data is served by the Aggregator at GET /deployments/metrics."""
+    return {
+        "total": 0,
+        "safe": 0,
+        "review": 0,
+        "blocked": 0,
+        "avgRisk": 0,
+        "avgConfidence": 0.0,
+    }
