@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+redis
+requests
+GitPython
+sentence-transformers
+PyYAML
+python-dotenv
