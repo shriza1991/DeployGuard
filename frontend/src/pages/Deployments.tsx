@@ -11,6 +11,8 @@ import {
   ChevronRight, 
   SlidersHorizontal,
   Check,
+  Terminal,
+  RefreshCw,
 } from 'lucide-react';
 import './Deployments.css';
 
@@ -220,13 +222,29 @@ export const Deployments: React.FC = () => {
       {/* Deployments Table */}
       <div className="glass-panel" style={{ padding: '0px', overflow: 'hidden' }}>
         {loading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '64px', gap: '16px', color: 'var(--text-muted)' }}>
-            <span style={{ animation: 'spin 1s linear infinite' }}>⏳</span>
-            <span>Fetching deployments archive...</span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '64px', gap: '14px', color: 'var(--text-muted)' }}>
+            <div style={{ width: '24px', height: '24px', border: '2px solid var(--panel-border)', borderTopColor: 'var(--accent-cyan)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+            <span className="font-mono" style={{ fontSize: '12px' }}>Fetching deployments archive...</span>
           </div>
         ) : filteredItems.length === 0 ? (
-          <div style={{ padding: '64px', textAlign: 'center', color: 'var(--text-muted)' }}>
-            No deployments found matching active filters.
+          <div style={{ padding: '64px 32px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+            <Rocket size={32} style={{ color: 'var(--text-muted)', opacity: 0.35 }} />
+            <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#fff', margin: 0 }}>No deployment analyses found</h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '380px', lineHeight: '1.5', margin: 0 }}>
+              {searchQuery || decisionFilter !== 'ALL' || projectFilter
+                ? 'No results match your active filters. Try broadening your search criteria.'
+                : 'No deployment analyses yet. Connect a GitHub repository or run a simulated scan to begin.'}
+            </p>
+            {!searchQuery && decisionFilter === 'ALL' && !projectFilter && (
+              <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                <button onClick={() => navigate('/simulator')} className="btn-primary-stitch font-mono">
+                  <Terminal size={13} /> Run Simulation
+                </button>
+                <button onClick={() => navigate('/')} className="btn-secondary-stitch font-mono">
+                  <RefreshCw size={13} /> Go to Dashboard
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <>

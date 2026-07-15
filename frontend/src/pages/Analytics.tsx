@@ -19,7 +19,8 @@ import {
   Ban,
   Eye,
   Info,
-  Shield
+  Shield,
+  BarChart3,
 } from 'lucide-react';
 import {
   BarChart,
@@ -453,9 +454,9 @@ const handleExportCSV = async () => {
       </div>
 
       {loading ? (
-        <div className="loading-state font-mono">
-          <Loader2 className="spin loading-spinner" />
-          <span>Loading metrics database...</span>
+        <div className="loading-state font-mono" style={{ padding: '80px 0', gap: '14px' }}>
+          <div style={{ width: '28px', height: '28px', border: '2px solid var(--panel-border)', borderTopColor: 'var(--accent-cyan)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading metrics database...</span>
         </div>
       ) : (
         <div className="analytics-body-layout">
@@ -557,35 +558,43 @@ const handleExportCSV = async () => {
               </div>
 
               <div className="chart-container-wrapper">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={volumeData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }} barGap={6}>
-                    <XAxis dataKey="date" stroke="#908fa0" fontSize={11} tickLine={false} axisLine={false} fontFamily="JetBrains Mono" />
-                    <YAxis stroke="#908fa0" fontSize={11} tickLine={false} axisLine={false} fontFamily="JetBrains Mono" />
-                    <Tooltip
-                      cursor={{ fill: 'rgba(78,222,163,0.03)' }}
-                      content={({ active, payload }) => {
-                        if (active && payload && payload.length) {
-                          return (
-                            <div className="chart-tooltip font-mono">
-                              <p className="tooltip-title">{payload[0].payload.date}</p>
-                              <p className="tooltip-value text-secondary">
-                                <span className="tooltip-dot bg-secondary" />
-                                Safe: {payload[0].value}
-                              </p>
-                              <p className="tooltip-value text-error">
-                                <span className="tooltip-dot bg-error" />
-                                Blocked: {payload[1]?.value}
-                              </p>
-                            </div>
-                          );
-                        }
-                        return null;
-                      }}
-                    />
-                    <Bar dataKey="Safe" fill="#4edea3" radius={[4, 4, 0, 0]} maxBarSize={30} />
-                    <Bar dataKey="Blocked" fill="#ffb4ab" radius={[4, 4, 0, 0]} maxBarSize={30} />
-                  </BarChart>
-                </ResponsiveContainer>
+                {volumeData.length === 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '10px', color: 'var(--text-muted)' }}>
+                    <BarChart3 size={28} style={{ opacity: 0.3 }} />
+                    <span className="font-mono" style={{ fontSize: '12px' }}>No deployment volume data for this period.</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Run a simulation to generate data.</span>
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={volumeData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }} barGap={6}>
+                      <XAxis dataKey="date" stroke="#908fa0" fontSize={11} tickLine={false} axisLine={false} fontFamily="JetBrains Mono" />
+                      <YAxis stroke="#908fa0" fontSize={11} tickLine={false} axisLine={false} fontFamily="JetBrains Mono" />
+                      <Tooltip
+                        cursor={{ fill: 'rgba(192,193,255,0.03)' }}
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            return (
+                              <div className="chart-tooltip font-mono" style={{ background: '#1b1b23', border: '1px solid #464554', borderRadius: '6px', padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                                <p style={{ fontSize: '11px', color: '#908fa0', marginBottom: '6px', fontWeight: 600 }}>{payload[0].payload.date}</p>
+                                <p style={{ fontSize: '12px', color: '#4edea3', margin: '3px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#4edea3', display: 'inline-block' }} />
+                                  Safe: <strong>{payload[0].value}</strong>
+                                </p>
+                                <p style={{ fontSize: '12px', color: '#ffb4ab', margin: '3px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#ffb4ab', display: 'inline-block' }} />
+                                  Blocked: <strong>{payload[1]?.value}</strong>
+                                </p>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <Bar dataKey="Safe" fill="#4edea3" radius={[4, 4, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="Blocked" fill="#ffb4ab" radius={[4, 4, 0, 0]} maxBarSize={30} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </div>
             </div>
 

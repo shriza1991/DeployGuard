@@ -1,38 +1,107 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getDeployment, type DeploymentDetail } from '../api/deployments';
-import { 
-  ChevronLeft, 
-  Copy, 
-  FileJson, 
-  Layers, 
-  Terminal, 
-  Check, 
-  Clock, 
-  Sparkles, 
+import {
+  ChevronLeft,
+  Copy,
+  FileJson,
+  Layers,
+  Terminal,
+  Check,
+  Clock,
+  Sparkles,
   CheckCircle2,
   Info,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Shield,
+  Server,
+  History,
+  AlertTriangle,
+  XCircle,
+  Code2,
+  GitBranch,
+  User,
+  Hash,
 } from 'lucide-react';
-import './Deployments.css'; // Reuse table/badge stylesheets
+import './Deployments.css';
 
-const AGENT_DISPLAY_NAMES: Record<string, string> = {
-  "code-risk": "Static Analysis Agent",
-  "infra-risk": "Infrastructure Drift Agent",
-  "incident-history": "Regression Analyzer"
+const AGENT_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
+  'code-risk': {
+    label: 'Code Risk Agent',
+    icon: <Code2 size={15} />,
+    color: 'rgba(192,193,255,0.15)',
+  },
+  'infra-risk': {
+    label: 'Infrastructure Risk Agent',
+    icon: <Server size={15} />,
+    color: 'rgba(255,185,95,0.12)',
+  },
+  'incident-history': {
+    label: 'Incident History Agent',
+    icon: <History size={15} />,
+    color: 'rgba(78,222,163,0.1)',
+  },
 };
+
+function SeverityBadge({ severity }: { severity: string }) {
+  const s = severity?.toLowerCase();
+  const classes: Record<string, string> = {
+    low: 'sev-badge low',
+    medium: 'sev-badge medium',
+    high: 'sev-badge high',
+    critical: 'sev-badge critical',
+  };
+  return <span className={classes[s] ?? 'sev-badge low'}>{severity.toUpperCase()}</span>;
+}
+
+function ScoreBar({ score }: { score: number }) {
+  const color = score >= 60 ? 'var(--color-block)' : score >= 30 ? 'var(--color-review)' : 'var(--color-safe)';
+  return (
+    <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '99px', overflow: 'hidden', marginTop: '6px' }}>
+      <div style={{ width: `${score}%`, height: '100%', background: color, borderRadius: '99px', transition: 'width 0.4s ease' }} />
+    </div>
+  );
+}
+
+function SimilarIncidentsTable({ incidents }: { incidents: any[] }) {
+  if (!incidents?.length) return null;
+  return (
+    <div style={{ marginTop: '12px' }}>
+      <h5 className="font-mono" style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+        Similar Historical Incidents
+      </h5>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {incidents.map((inc, i) => (
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '5px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span className="font-mono" style={{ fontSize: '11px', color: '#fff', fontWeight: 600 }}>{inc.title || inc.incident_id}</span>
+              <span className="font-mono" style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{inc.incident_id} · {inc.outcome}</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span className={`sev-badge ${inc.severity?.toLowerCase()}`}>{inc.severity}</span>
+              <span className="font-mono" style={{ fontSize: '11px', color: 'var(--accent-cyan)', fontWeight: 700 }}>
+                {Math.round((inc.similarity ?? 0) * 100)}%
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export const DeploymentDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  
+
   const [deployment, setDeployment] = useState<DeploymentDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedTimelineStep, setSelectedTimelineStep] = useState<string>("Aggregator");
+  const [selectedTimelineStep, setSelectedTimelineStep] = useState<string>('Aggregator');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showRawJson, setShowRawJson] = useState(false);
+  const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({});
 
   const fetchDetail = async () => {
     if (!id) return;
@@ -43,15 +112,13 @@ export const DeploymentDetails: React.FC = () => {
       setDeployment(detail);
     } catch (e) {
       console.error(e);
-      setError("Failed to locate this deployment in the gate registry.");
+      setError('Failed to locate this deployment in the gate registry.');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchDetail();
-  }, [id]);
+  useEffect(() => { fetchDetail(); }, [id]);
 
   const triggerToast = (msg: string) => {
     setToastMessage(msg);
@@ -61,26 +128,30 @@ export const DeploymentDetails: React.FC = () => {
   const handleCopyId = () => {
     if (!id) return;
     navigator.clipboard.writeText(id);
-    triggerToast("Copied Correlation ID to clipboard!");
+    triggerToast('Copied Correlation ID to clipboard!');
   };
 
   const handleExportJSON = () => {
     if (!deployment) return;
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(deployment, null, 2));
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `deployguard_audit_${id?.substring(0, 8)}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
-    triggerToast("Exported raw audit JSON successfully!");
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(deployment, null, 2));
+    const a = document.createElement('a');
+    a.setAttribute('href', dataStr);
+    a.setAttribute('download', `deployguard_audit_${id?.substring(0, 8)}.json`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    triggerToast('Exported raw audit JSON successfully!');
+  };
+
+  const toggleAgent = (key: string) => {
+    setExpandedAgents(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   if (loading) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: '16px', color: 'var(--text-muted)' }}>
-        <span style={{ animation: 'spin 1s linear infinite' }}>⏳</span>
-        <span>Assembling threat report...</span>
+        <div style={{ width: '28px', height: '28px', border: '2px solid var(--panel-border)', borderTopColor: 'var(--accent-cyan)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <span className="font-mono" style={{ fontSize: '12px' }}>Assembling threat report...</span>
       </div>
     );
   }
@@ -88,7 +159,8 @@ export const DeploymentDetails: React.FC = () => {
   if (error || !deployment) {
     return (
       <div style={{ padding: '48px', textAlign: 'center' }}>
-        <h3 style={{ color: 'var(--color-block)', marginBottom: '16px' }}>Deployment Not Found</h3>
+        <XCircle size={32} style={{ color: 'var(--color-block)', margin: '0 auto 16px' }} />
+        <h3 style={{ color: 'var(--color-block)', marginBottom: '8px' }}>Deployment Not Found</h3>
         <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>{error || 'Unable to load deployment data.'}</p>
         <button onClick={() => navigate('/deployments')} className="btn-secondary-stitch">
           <ChevronLeft size={14} />
@@ -98,75 +170,41 @@ export const DeploymentDetails: React.FC = () => {
     );
   }
 
-  // --- Helpers ---
-  const getAgentsList = () => {
-    if (!deployment.agents) return [];
-    return Object.entries(deployment.agents).map(([key, data]: [string, any]) => {
-      const name = AGENT_DISPLAY_NAMES[key] || key.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase());
-      const confidencePercent = Math.round((data.confidence || 0.9) * 100);
-      
-      let summary = `No critical alerts. Verified logic metrics for ${deployment.repository}.`;
-      if (data.reasons && data.reasons.length > 0) {
-        summary = data.reasons.join(". ");
-      } else if (data.score > 50) {
-        summary = `Elevated risk warning identified on ${name}.`;
-      }
-      
-      let reasoning = `Passed verification checks with high-confidence security criteria.`;
-      if (data.recommendations && data.recommendations.length > 0) {
-        reasoning = data.recommendations[0];
-      } else if (data.score > 50) {
-        reasoning = `Requires engineering review before promoting this commit.`;
-      }
-      
-      return {
-        id: key,
-        name: name,
-        riskScore: data.score,
-        severity: data.severity || 'low',
-        confidence: `${confidencePercent}%`,
-        summary: summary,
-        reasoning: reasoning,
-        status: data.score >= 50 ? "warning" as const : "safe" as const,
-        metadata: data.metadata || {}
-      };
-    });
-  };
+  const agentEntries = deployment.agents ? Object.entries(deployment.agents) : [];
 
   const getPipelineSteps = () => {
     const isPending = deployment.status === 'pending';
     const shortSha = deployment.correlation_id.substring(0, 7);
-    
     return [
-      { id: "Webhook", label: "Webhook", status: "completed" as const, iconType: "check" as const, details: `Deployment trigger received from GitHub branch commit sha: ${shortSha || 'unknown'}.` },
-      { id: "Gateway", label: "Gateway", status: "completed" as const, iconType: "check" as const, details: "Ingress proxy and API gateway configurations verified with zero errors." },
-      { id: "Code Risk", label: "Code Risk", status: "completed" as const, iconType: "check" as const, details: `AI code quality agent scanned modified files for ${deployment.repository}.` },
-      { id: "Infra Risk", label: "Infra Risk", status: "completed" as const, iconType: "check" as const, details: "Infrastructure as code verified. Terraform dry-run passed with zero security drifts." },
-      { id: "Incidents", label: "Incidents", status: "completed" as const, iconType: "check" as const, details: "Correlated existing live service health with proposed release. No critical overlaps." },
-      { 
-        id: "Aggregator", 
-        label: "Aggregator", 
-        status: isPending ? "active" as const : "completed" as const, 
-        iconType: isPending ? "active" as const : "check" as const, 
-        details: isPending 
-          ? "Agentic synthesis active. Amalgamating logs, test coverages, and IAM parameters into visual scorecard."
-          : "Agentic synthesis complete. Compiled scorecard for risk assessment metrics."
+      { id: 'Webhook', label: 'Webhook', status: 'completed' as const, iconType: 'check' as const, details: `Deployment trigger received. SHA: ${shortSha}.` },
+      { id: 'Gateway', label: 'Gateway', status: 'completed' as const, iconType: 'check' as const, details: 'Ingress proxy verified with zero errors.' },
+      { id: 'Code Risk', label: 'Code Risk', status: 'completed' as const, iconType: 'check' as const, details: `AI code quality agent scanned files for ${deployment.repository}.` },
+      { id: 'Infra Risk', label: 'Infra Risk', status: 'completed' as const, iconType: 'check' as const, details: 'Infrastructure verified. Terraform dry-run passed.' },
+      { id: 'Incidents', label: 'Incidents', status: 'completed' as const, iconType: 'check' as const, details: 'Correlated live service health with release. No critical overlaps.' },
+      {
+        id: 'Aggregator', label: 'Aggregator',
+        status: isPending ? 'active' as const : 'completed' as const,
+        iconType: isPending ? 'active' as const : 'check' as const,
+        details: isPending ? 'Agentic synthesis active.' : 'Agentic synthesis complete. Scorecard compiled.',
       },
-      { 
-        id: "Decision", 
-        label: "Decision", 
-        status: isPending ? "pending" as const : "completed" as const, 
-        iconType: isPending ? "pending" as const : "check" as const, 
-        details: isPending 
-          ? "Final risk threshold enforcement. Awaiting canary promotion flag upon successful metrics review."
-          : `Final risk threshold enforcement completed. Decision verdict: ${deployment.decision}.`
-      }
+      {
+        id: 'Decision', label: 'Decision',
+        status: isPending ? 'pending' as const : 'completed' as const,
+        iconType: isPending ? 'pending' as const : 'check' as const,
+        details: isPending ? 'Awaiting final risk threshold.' : `Verdict: ${deployment.decision}.`,
+      },
     ];
   };
 
+  const decisionColor = deployment.decision === 'BLOCK'
+    ? 'var(--color-block)'
+    : deployment.decision === 'REVIEW'
+      ? 'var(--color-review)'
+      : 'var(--color-safe)';
+
   return (
     <div className="deployments-container fade-in" style={{ paddingBottom: '48px' }}>
-      {/* Toast Notification */}
+      {/* Toast */}
       {toastMessage && (
         <div className="toast-notification font-mono">
           <CheckCircle2 className="toast-icon text-green" />
@@ -182,102 +220,94 @@ export const DeploymentDetails: React.FC = () => {
         </button>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button onClick={handleCopyId} className="btn-secondary-stitch font-mono">
-            <Copy size={14} />
-            <span>Copy ID</span>
+            <Copy size={14} /><span>Copy ID</span>
           </button>
           <button onClick={handleExportJSON} className="btn-secondary-stitch font-mono">
-            <FileJson size={14} />
-            <span>Export JSON</span>
+            <FileJson size={14} /><span>Export JSON</span>
           </button>
         </div>
       </div>
 
-      {/* Summary Header Card */}
-      <div className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span className={`verdict-tag ${deployment.decision?.toLowerCase()}`}>
+      {/* ===== SUMMARY HEADER CARD ===== */}
+      <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-start' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+              <span className={`verdict-tag ${deployment.decision?.toLowerCase()}`} style={{ fontSize: '12px' }}>
                 {deployment.decision}
               </span>
-              <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#fff' }} className="font-mono">{deployment.repository}</h2>
+              <h2 className="font-mono" style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: 0 }}>
+                {deployment.repository}
+              </h2>
             </div>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '8px' }}>
-              Commit: <span className="font-mono" style={{ color: 'var(--accent-cyan)' }}>{deployment.commit_message || 'N/A'}</span>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '12px', marginBottom: '0', fontFamily: 'var(--font-mono)' }}>
+              {deployment.commit_message || 'No commit message'}
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: '16px' }}>
-            <div style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px', textAlign: 'center' }}>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>OVERALL SCORE</span>
-              <h3 className="font-mono" style={{ fontSize: '20px', color: '#fff', fontWeight: 'bold', marginTop: '4px' }}>{deployment.overall_score ?? '-'}</h3>
+          {/* Score + Confidence chips */}
+          <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
+            <div style={{ padding: '10px 18px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px', textAlign: 'center' }}>
+              <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Risk Score</div>
+              <div className="font-mono" style={{ fontSize: '22px', color: decisionColor, fontWeight: 700, marginTop: '2px' }}>
+                {deployment.overall_score ?? '—'}
+              </div>
             </div>
-            <div style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px', textAlign: 'center' }}>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>CONFIDENCE</span>
-              <h3 className="font-mono" style={{ fontSize: '20px', color: '#fff', fontWeight: 'bold', marginTop: '4px' }}>
-                {deployment.overall_confidence !== undefined ? `${Math.round(deployment.overall_confidence * 100)}%` : '-'}
-              </h3>
+            <div style={{ padding: '10px 18px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px', textAlign: 'center' }}>
+              <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Confidence</div>
+              <div className="font-mono" style={{ fontSize: '22px', color: 'var(--color-safe)', fontWeight: 700, marginTop: '2px' }}>
+                {deployment.overall_confidence !== undefined ? `${Math.round(deployment.overall_confidence * 100)}%` : '—'}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Metadata Details Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', borderTop: '1px solid var(--panel-border)', marginTop: '20px', paddingTop: '20px' }}>
-          <div>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>BRANCH</span>
-            <p className="font-mono" style={{ color: 'var(--text-secondary)', fontSize: '12px', marginTop: '4px' }}>{deployment.branch || 'unknown'}</p>
-          </div>
-          <div>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>AUTHOR</span>
-            <p className="font-mono" style={{ color: 'var(--text-secondary)', fontSize: '12px', marginTop: '4px' }}>{deployment.author || 'unknown'}</p>
-          </div>
-          <div>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>COMMIT SHA</span>
-            <p className="font-mono" style={{ color: 'var(--text-secondary)', fontSize: '12px', marginTop: '4px' }}>{deployment.commit_sha || 'N/A'}</p>
-          </div>
-          <div>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>CORRELATION ID</span>
-            <p className="font-mono" style={{ color: 'var(--text-secondary)', fontSize: '12px', marginTop: '4px' }}>{deployment.correlation_id}</p>
-          </div>
+        {/* Metadata row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', borderTop: '1px solid var(--panel-border)', marginTop: '18px', paddingTop: '18px' }}>
+          {[
+            { icon: <GitBranch size={12} />, label: 'BRANCH', val: deployment.branch || 'unknown' },
+            { icon: <User size={12} />, label: 'AUTHOR', val: deployment.author || 'unknown' },
+            { icon: <Hash size={12} />, label: 'COMMIT SHA', val: deployment.commit_sha || 'N/A' },
+            { icon: <Hash size={12} />, label: 'CORRELATION ID', val: deployment.correlation_id.substring(0, 16) + '…' },
+          ].map(({ icon, label, val }) => (
+            <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--text-muted)' }}>
+                {icon}
+                <span style={{ fontSize: '9px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+              </div>
+              <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{val}</span>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Pipeline Timeline Panel */}
-      <div className="timeline-panel" style={{ padding: '24px', marginBottom: '24px' }}>
+      {/* ===== PIPELINE TIMELINE ===== */}
+      <div className="timeline-panel" style={{ padding: '20px', marginBottom: '20px' }}>
         <div className="timeline-header-bar">
           <div className="timeline-title-row">
             <Layers className="timeline-title-icon" />
-            <h3>Deployment Timeline Progress</h3>
+            <h3>Pipeline Timeline</h3>
           </div>
           <div className="live-status-indicator font-mono">
             <span className="ping-ring">
               <span className="ping-effect"></span>
               <span className="ping-dot"></span>
             </span>
-            <span>Audit Stage Details</span>
+            <span>Stage Details</span>
           </div>
         </div>
 
-        {/* Timeline Sequence UI */}
-        <div className="timeline-track-container" style={{ margin: '32px 0 16px 0' }}>
+        <div className="timeline-track-container" style={{ margin: '24px 0 12px 0' }}>
           <div className="timeline-backline">
             <div className="timeline-progress-line" style={{ width: deployment.status === 'pending' ? '80%' : '100%' }} />
           </div>
-
           <div className="pipeline-steps-row" style={{ display: 'flex', justifyContent: 'space-between' }}>
             {getPipelineSteps().map(step => {
               const isSelected = selectedTimelineStep === step.id;
-              let stepClass = "status-pending";
+              let stepClass = 'status-pending';
               let nodeIcon = <Clock className="node-icon" />;
-
-              if (step.status === "completed") {
-                stepClass = "status-completed";
-                nodeIcon = <Check className="node-icon" />;
-              } else if (step.status === "active") {
-                stepClass = "status-active";
-                nodeIcon = <Sparkles className="node-icon pulse" />;
-              }
-
+              if (step.status === 'completed') { stepClass = 'status-completed'; nodeIcon = <Check className="node-icon" />; }
+              else if (step.status === 'active') { stepClass = 'status-active'; nodeIcon = <Sparkles className="node-icon pulse" />; }
               return (
                 <button
                   key={step.id}
@@ -285,110 +315,196 @@ export const DeploymentDetails: React.FC = () => {
                   className={`timeline-node-btn ${isSelected ? 'selected' : ''} ${stepClass}`}
                 >
                   <div className="node-circle">{nodeIcon}</div>
-                  <span className="node-label" style={{ fontSize: '11px' }}>{step.label}</span>
+                  <span className="node-label" style={{ fontSize: '10px' }}>{step.label}</span>
                 </button>
               );
             })}
           </div>
         </div>
-
-        {/* Selection Details text */}
-        <div className="timeline-context-panel font-mono" style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
-          <Terminal size={14} className="text-indigo" />
-          <span style={{ color: 'var(--text-secondary)', marginLeft: '8px' }}>
+        <div className="timeline-context-panel font-mono" style={{ padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
+          <Terminal size={12} className="text-indigo" />
+          <span style={{ color: 'var(--text-secondary)', marginLeft: '8px', fontSize: '12px' }}>
             {getPipelineSteps().find(s => s.id === selectedTimelineStep)?.details}
           </span>
         </div>
       </div>
 
-      {/* Agents Scorecard Cards */}
-      <div style={{ marginBottom: '24px' }}>
-        <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#fff', marginBottom: '16px' }}>Agent Vulnerability Evaluations</h3>
-        <div className="agent-cards-grid">
-          {getAgentsList().map(agent => (
-            <div key={agent.id} className={`agent-card border-${agent.status}`}>
-              <div className="agent-card-header">
-                <h3 className="agent-name" style={{ fontSize: '14px', fontWeight: 600 }}>{agent.name}</h3>
-                <span className="confidence-badge font-mono" style={{ fontSize: '10px' }}>Confidence: {agent.confidence}</span>
-              </div>
-              <div className="agent-card-body">
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>RISK RATING:</span>
-                  <span className={`font-mono ${agent.status}`} style={{ fontWeight: 'bold' }}>{agent.riskScore}/100 ({agent.severity.toUpperCase()})</span>
+      {/* ===== AGENT CARDS (per-agent) ===== */}
+      <h3 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)', marginBottom: '12px' }}>
+        Agent Assessments
+      </h3>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+        {agentEntries.map(([key, data]: [string, any]) => {
+          const meta = AGENT_META[key] ?? { label: key, icon: <Shield size={15} />, color: 'rgba(255,255,255,0.04)' };
+          const isExpanded = expandedAgents[key] !== false; // default open
+          const score = data.score ?? 0;
+          const severity = data.severity ?? 'low';
+          const confidence = Math.round((data.confidence ?? 0.9) * 100);
+          const reasons: string[] = data.reasons ?? [];
+          const recommendations: string[] = data.recommendations ?? [];
+          const similarIncidents: any[] = data.similar_incidents ?? [];
+          const llm = data.llm;
+
+          return (
+            <div key={key} className="glass-panel" style={{ overflow: 'hidden' }}>
+              {/* Agent header — clickable to expand */}
+              <button
+                onClick={() => toggleAgent(key)}
+                style={{
+                  width: '100%', padding: '16px 20px', background: meta.color,
+                  border: 'none', borderBottom: isExpanded ? '1px solid var(--panel-border)' : 'none',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer',
+                  color: '#fff',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ color: 'var(--accent-cyan)' }}>{meta.icon}</span>
+                  <span style={{ fontSize: '14px', fontWeight: 600 }}>{meta.label}</span>
                 </div>
-                <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{agent.summary}</p>
-                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--panel-border)' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>AGENT GUIDANCE:</span>
-                  <p style={{ fontSize: '12px', color: 'var(--text-primary)', fontStyle: 'italic', marginTop: '4px' }}>"{agent.reasoning}"</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <SeverityBadge severity={severity} />
+                  <span className="font-mono" style={{ fontSize: '12px', color: score >= 60 ? 'var(--color-block)' : score >= 30 ? 'var(--color-review)' : 'var(--color-safe)', fontWeight: 700 }}>
+                    {score}/100
+                  </span>
+                  {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </div>
-                {agent.metadata && Object.keys(agent.metadata).length > 0 && (
-                  <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--panel-border)' }}>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>METADATA:</span>
-                    <pre style={{ fontSize: '10px', color: 'var(--text-secondary)', overflowX: 'auto', marginTop: '4px', background: 'var(--bg-secondary)', padding: '6px', borderRadius: '4px' }}>
-                      {JSON.stringify(agent.metadata, null, 2)}
-                    </pre>
+              </button>
+
+              {/* Agent body */}
+              {isExpanded && (
+                <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Score bar + confidence */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>RISK SCORE</span>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>CONFIDENCE: {confidence}%</span>
+                    </div>
+                    <ScoreBar score={score} />
                   </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
 
-      {/* Explainability Summary */}
-      <div className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-          <Sparkles size={16} className="text-primary" />
-          <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#fff' }}>Explainability Risk Analysis</h3>
-        </div>
-        
-        <div className="ai-summary-box" style={{ background: 'rgba(192, 193, 255, 0.03)', border: '1px solid rgba(192, 193, 255, 0.1)', padding: '16px', borderRadius: '6px', marginBottom: '20px' }}>
-          <p style={{ fontSize: '13px', lineHeight: '1.6', color: 'var(--text-primary)' }}>
-            {deployment.summary || "Explainability report currently unavailable."}
-          </p>
-        </div>
+                  {/* Reasons */}
+                  {reasons.length > 0 && (
+                    <div>
+                      <h5 className="font-mono" style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>Risk Factors</h5>
+                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {reasons.map((r, i) => (
+                          <li key={i} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            <AlertTriangle size={12} style={{ color: 'var(--color-block)', marginTop: '2px', flexShrink: 0 }} />
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
-          <div>
-            <h4 style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }} className="font-mono">THREAT RISK HEURISTICS</h4>
-            <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {deployment.reasons && deployment.reasons.length > 0 ? (
-                deployment.reasons.map((r, i) => (
-                  <li key={i} style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-                    <Info size={14} style={{ color: 'var(--accent-blue)', marginTop: '2px', flexShrink: 0 }} />
-                    <span>{r}</span>
-                  </li>
-                ))
-              ) : (
-                <li style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No heuristics triggers.</li>
+                  {/* Recommendations */}
+                  {recommendations.length > 0 && (
+                    <div style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px' }}>
+                      <h5 className="font-mono" style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>Recommendations</h5>
+                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        {recommendations.map((r, i) => (
+                          <li key={i} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            <Info size={12} style={{ color: 'var(--accent-blue)', marginTop: '2px', flexShrink: 0 }} />
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* LLM Summary */}
+                  {llm?.available && llm.summary && (
+                    <div style={{ background: 'rgba(192,193,255,0.03)', border: '1px solid rgba(192,193,255,0.1)', borderRadius: '6px', padding: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                        <Sparkles size={12} style={{ color: 'var(--accent-cyan)' }} />
+                        <span className="font-mono" style={{ fontSize: '9px', color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                          LLM Analysis — {llm.provider}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '12px', color: 'var(--text-primary)', lineHeight: '1.6', margin: 0 }}>{llm.summary}</p>
+                    </div>
+                  )}
+
+                  {/* Similar incidents (incident-history agent) */}
+                  <SimilarIncidentsTable incidents={similarIncidents} />
+
+                  {/* Metadata */}
+                  {data.metadata && Object.keys(data.metadata).length > 0 && (
+                    <details style={{ cursor: 'pointer' }}>
+                      <summary className="font-mono" style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', userSelect: 'none' }}>
+                        Raw Metadata
+                      </summary>
+                      <pre style={{ fontSize: '10px', color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '8px', borderRadius: '4px', overflowX: 'auto', marginTop: '8px', border: '1px solid var(--panel-border)' }}>
+                        {JSON.stringify(data.metadata, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </div>
               )}
-            </ul>
-          </div>
-          <div>
-            <h4 style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }} className="font-mono">RECOMMENDED GUARD ACTIONS</h4>
-            <div className="best-practices-card" style={{ padding: '12px' }}>
-              <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                {deployment.recommendations && deployment.recommendations.length > 0 
-                  ? deployment.recommendations.join(". ")
-                  : "Proceed with standard pipeline canary controls."}
-              </p>
             </div>
-          </div>
-        </div>
+          );
+        })}
       </div>
 
-      {/* Raw JSON Accordion */}
-      <div className="glass-panel" style={{ padding: '0px', overflow: 'hidden' }}>
+      {/* ===== EXPLAINABILITY SUMMARY ===== */}
+      {(deployment.summary || (deployment.reasons?.length ?? 0) > 0) && (
+        <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <Sparkles size={15} style={{ color: 'var(--accent-cyan)' }} />
+            <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Aggregator Explainability</h3>
+          </div>
+
+          {deployment.summary && (
+            <div style={{ background: 'rgba(192,193,255,0.03)', border: '1px solid rgba(192,193,255,0.1)', padding: '14px', borderRadius: '6px', marginBottom: '16px' }}>
+              <p style={{ fontSize: '13px', lineHeight: '1.6', color: 'var(--text-primary)', margin: 0 }}>{deployment.summary}</p>
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
+            {deployment.reasons && deployment.reasons.length > 0 && (
+              <div>
+                <h4 className="font-mono" style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '10px' }}>Threat Risk Factors</h4>
+                <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {deployment.reasons.map((r, i) => (
+                    <li key={i} style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                      <Info size={13} style={{ color: 'var(--accent-blue)', marginTop: '2px', flexShrink: 0 }} />
+                      <span>{r}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {deployment.recommendations && deployment.recommendations.length > 0 && (
+              <div>
+                <h4 className="font-mono" style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '10px' }}>Recommended Guard Actions</h4>
+                <div style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px' }}>
+                  <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {deployment.recommendations.map((r, i) => (
+                      <li key={i} style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                        <CheckCircle2 size={12} style={{ color: 'var(--color-safe)', marginTop: '2px', flexShrink: 0 }} />
+                        <span>{r}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== RAW JSON ACCORDION ===== */}
+      <div className="glass-panel" style={{ overflow: 'hidden' }}>
         <button
           onClick={() => setShowRawJson(!showRawJson)}
-          style={{ width: '100%', padding: '16px 24px', background: 'none', border: 'none', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+          style={{ width: '100%', padding: '14px 20px', background: 'none', border: 'none', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', transition: 'background 0.15s' }}
         >
-          <span style={{ fontSize: '14px', fontWeight: 600 }} className="font-mono">RAW SECURE Gate Payload JSON</span>
-          {showRawJson ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          <span className="font-mono" style={{ fontSize: '12px', fontWeight: 600 }}>RAW PIPELINE PAYLOAD JSON</span>
+          {showRawJson ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         {showRawJson && (
-          <div style={{ padding: '24px', borderTop: '1px solid var(--panel-border)', background: 'var(--bg-secondary)' }}>
-            <pre style={{ margin: 0, padding: '12px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--panel-border)', borderRadius: '6px', overflowX: 'auto', fontSize: '11px', color: '#8df' }} className="font-mono">
+          <div style={{ padding: '20px', borderTop: '1px solid var(--panel-border)', background: 'var(--bg-secondary)' }}>
+            <pre className="font-mono" style={{ margin: 0, padding: '12px', background: 'rgba(0,0,0,0.25)', border: '1px solid var(--panel-border)', borderRadius: '6px', overflowX: 'auto', fontSize: '11px', color: '#8df', lineHeight: '1.5' }}>
               {JSON.stringify(deployment, null, 2)}
             </pre>
           </div>

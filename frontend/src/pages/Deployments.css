@@ -1306,3 +1306,47 @@
   width: 14px;
   height: 14px;
 }
+
+/* ==================== SEVERITY & VERDICT BADGES (DeploymentDetails) ==================== */
+.sev-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: 'JetBrains Mono', monospace;
+  border: 1px solid transparent;
+}
+.sev-badge.low      { background: rgba(78,222,163,0.1);  color: var(--ds-secondary); border-color: rgba(78,222,163,0.2); }
+.sev-badge.medium   { background: rgba(192,193,255,0.08); color: var(--ds-primary);   border-color: rgba(192,193,255,0.15); }
+.sev-badge.high     { background: rgba(255,185,95,0.1);  color: var(--ds-warning);   border-color: rgba(255,185,95,0.2); }
+.sev-badge.critical { background: rgba(255,180,171,0.12); color: var(--ds-error);     border-color: rgba(255,180,171,0.25); }
+
+.verdict-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+  font-family: 'JetBrains Mono', monospace;
+}
+.verdict-tag.safe    { background: rgba(78,222,163,0.1);  color: var(--ds-secondary); border-color: rgba(78,222,163,0.2); }
+.verdict-tag.block   { background: rgba(255,180,171,0.12); color: var(--ds-error);    border-color: rgba(255,180,171,0.25); }
+.verdict-tag.review  { background: rgba(255,185,95,0.1);  color: var(--ds-warning);  border-color: rgba(255,185,95,0.2); }
+.verdict-tag.pending { background: rgba(255,255,255,0.04); color: #71717a;            border-color: rgba(255,255,255,0.06); }
+
+/* Table row hover */
+.table-row-hover {
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.table-row-hover:hover { background-color: rgba(41,41,50,0.5); }
+
+/* fade-in */
+.fade-in { animation: fade-in-anim 0.25s ease; }
+@keyframes fade-in-anim { from { opacity: 0; } to { opacity: 1; } }
