@@ -1,6 +1,18 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Rocket, BarChart3, History, ShieldCheck } from 'lucide-react';
+import {
+  LayoutDashboard,
+  Rocket,
+  BarChart3,
+  Bot,
+  History,
+  Activity,
+  Terminal,
+  ClipboardList,
+  Settings,
+  Info,
+  ShieldCheck
+} from 'lucide-react';
 import './Sidebar.css';
 
 export const Sidebar: React.FC = () => {
@@ -37,11 +49,59 @@ export const Sidebar: React.FC = () => {
         </NavLink>
         
         <NavLink 
-          to="/incident-history" 
+          to="/agents" 
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <Bot className="nav-icon" />
+          <span>Agents</span>
+        </NavLink>
+        
+        <NavLink 
+          to="/incidents" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
         >
           <History className="nav-icon" />
-          <span>Incident History</span>
+          <span>Incidents</span>
+        </NavLink>
+        
+        <NavLink 
+          to="/system-health" 
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <Activity className="nav-icon" />
+          <span>System Health</span>
+        </NavLink>
+        
+        <NavLink 
+          to="/simulator" 
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <Terminal className="nav-icon" />
+          <span>Webhook Simulator</span>
+        </NavLink>
+        
+        <NavLink 
+          to="/reports" 
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <ClipboardList className="nav-icon" />
+          <span>Reports</span>
+        </NavLink>
+        
+        <NavLink 
+          to="/settings" 
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <Settings className="nav-icon" />
+          <span>Settings</span>
+        </NavLink>
+        
+        <NavLink 
+          to="/about" 
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <Info className="nav-icon" />
+          <span>About</span>
         </NavLink>
       </nav>
       

@@ -75,8 +75,8 @@ def get_seed_settings() -> SeedSettings:
         qdrant_timeout_seconds=float(os.getenv("QDRANT_TIMEOUT_SECONDS", "10")),
         qdrant_retries=int(os.getenv("QDRANT_RETRIES", "3")),
         embedding_cache_size=int(os.getenv("EMBEDDING_CACHE_SIZE", "512")),
-        incident_count_min=int(os.getenv("INCIDENT_COUNT_MIN", "50")),
-        incident_count_max=int(os.getenv("INCIDENT_COUNT_MAX", "100")),
+        incident_count_min=int(os.getenv("INCIDENT_COUNT_MIN", "300")),
+incident_count_max=int(os.getenv("INCIDENT_COUNT_MAX", "500")),
         verification_samples=int(os.getenv("VERIFICATION_SAMPLES", "3")),
         verification_top_k=int(os.getenv("VERIFICATION_TOP_K", "5")),
     )

@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from redis_store import RedisStore
 from config import get_settings
@@ -500,7 +500,7 @@ def get_analytics_summary(range: Optional[str] = None):
 @router.get("/analytics/volume")
 
 
-def get_analytics_volume(time_range: Optional[str] = None):
+def get_analytics_volume(time_range: Optional[str] = Query(None, alias="range")):
     days = _parse_range_days(time_range)
     all_decisions = _decisions_in_range(redis_store.list_final_decisions(), days)
 

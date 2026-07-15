@@ -25,6 +25,9 @@ export interface DeploymentDetail extends FinalDecision {
   author?: string;
   pull_request_title?: string;
   pull_request_body?: string;
+  branch?: string;
+  commit_sha?: string;
+  status?: string;
 }
 
 export type PipelineStageStatus = 'completed' | 'active' | 'pending' | 'failed';

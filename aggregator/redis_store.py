@@ -65,7 +65,7 @@ class RedisStore:
             raw = self.client.get(key)
             if raw:
                 try:
-                    decisions.append(json.loads(raw))
+                    decisions.append(json.loads(raw.decode("utf-8")))
                 except Exception:
                     pass
         decisions.sort(
