@@ -11,6 +11,9 @@ import requests
 from llm.factory import get_provider
 from llm.prompt_builder import build_prompt
 
+from repository_context_client import RepositoryEvidenceProvider
+from llm.context_assembly import assemble_context
+
 logger = logging.getLogger("code-risk-llm")
 
 
@@ -23,16 +26,21 @@ class LLMReasoner:
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     def reason_about_change(self, payload: dict[str, Any], deterministic_result: dict[str, Any]) -> dict[str, Any]:
-        prompt = build_prompt(
-            score=int(deterministic_result.get("score", 0)),
-            severity=str(deterministic_result.get("severity", "low")),
-            confidence=int(deterministic_result.get("confidence", 0)),
-            reasons=list(deterministic_result.get("reasons", [])) or [],
-            recommendations=list(deterministic_result.get("recommendations", [])) or [],
-            changed_files=_extract_changed_files(payload),
-            metadata=deterministic_result.get("metadata", {}),
-        )
+        # 1. Retrieve repository evidence and metrics (runs AFTER deterministic risk analyzers)
+        raw_evidence, metrics = RepositoryEvidenceProvider.get_repository_evidence(payload)
 
+        # 2. Attach metrics to the metadata of the deterministic result
+        if "metadata" not in deterministic_result or not isinstance(deterministic_result["metadata"], dict):
+            deterministic_result["metadata"] = {}
+        deterministic_result["metadata"]["repository_evidence_metrics"] = metrics
+
+        # 3. Assemble structured context
+        assembled_context = assemble_context(payload, deterministic_result, raw_evidence, metrics)
+
+        # 4. Format prompt
+        prompt = build_prompt(assembled_context)
+
+        # 5. Check cache and execute
         cache_key = self._cache_key(payload, deterministic_result)
         cached = self._cache.get(cache_key)
         if cached and time.time() - cached[0] < self.cache_ttl_seconds:
