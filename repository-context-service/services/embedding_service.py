@@ -1,3 +1,4 @@
+from transformers.models.chameleon import image_processing_chameleon_fast
 import logging
 import time
 import re
@@ -81,3 +82,10 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed generating batch embeddings: {e}. Falling back to hash provider.")
             return [self._hash_provider.embed(text) for text in texts]
+    
+    def load_model(self):
+        """
+        Eagerly loads the embedding model during application startup.
+        Safe to call multiple times.
+        """
+        self._get_model()

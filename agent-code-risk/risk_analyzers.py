@@ -462,7 +462,11 @@ def fetch_pull_request_files(pr_url: str) -> list[dict[str, Any]]:
 def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     pr = payload.get("pull_request") or {}
     head_commit = payload.get("head_commit") or {}
+    repository = payload.get("repository") or {}
     files: list[dict[str, Any]] = []
+
+    if isinstance(payload.get("changed_files"), list):
+        files.extend(payload.get("changed_files", []))
 
     if isinstance(payload.get("files"), list):
         files.extend(payload.get("files", []))
@@ -477,12 +481,20 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(payload.get("diff"), str) and payload.get("diff"):
         files.append({"filename": payload.get("filename", "<diff>"), "patch": payload.get("diff")})
 
-    payload_changed_files = int(
+    raw_changed_files = (
         payload.get("changed_files")
         or pr.get("changed_files")
         or payload.get("pull_request", {}).get("changed_files")
-        or 0
     )
+
+    if isinstance(raw_changed_files, list):
+        payload_changed_files = len(raw_changed_files)
+
+    elif isinstance(raw_changed_files, int):
+        payload_changed_files = raw_changed_files
+
+    else:
+        payload_changed_files = 0
 
     # Preserve actual patch content so analyzers can inspect it.
     patch_text = "\n".join(str(item.get("patch", "")) for item in files if item.get("patch"))
@@ -499,6 +511,7 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
         "changed_files": files,
         "changed_file_count": changed_file_count,
         "payload_changed_file_count": payload_changed_files,
+        "repository": repository,
         "changed_line_count": changed_line_count,
         "patch_text": patch_text,
         "text": " ".join(

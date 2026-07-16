@@ -42,6 +42,7 @@ class GitHubWebhookPayload(BaseModel):
     sender: dict | None = None
     head_commit: dict | None = None
     pull_request: dict | None = None
+    changed_files: list[dict] | None = None
 
 
 @router.post("/github")

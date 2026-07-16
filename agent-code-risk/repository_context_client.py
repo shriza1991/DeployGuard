@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Tuple
 logger = logging.getLogger("code-risk-agent")
 
 REPOSITORY_CONTEXT_URL = os.getenv("REPOSITORY_CONTEXT_URL", "http://repository-context-service:8003").rstrip("/")
-REPOSITORY_CONTEXT_TIMEOUT = float(os.getenv("REPOSITORY_CONTEXT_TIMEOUT", "2.0"))
+REPOSITORY_CONTEXT_TIMEOUT = float(os.getenv("REPOSITORY_CONTEXT_TIMEOUT", "10.0"))
 
 class RepositoryEvidenceProvider:
     @staticmethod
@@ -39,6 +39,10 @@ class RepositoryEvidenceProvider:
 
         if not repo_full_name:
             logger.info("Repository context skipped: repository name not found in payload")
+            logger.info("Metrics before return: %s", metrics)
+            logger.info("retrieved_chunks: %s", metrics.get("retrieved_chunks"))
+            logger.info("repository_context_available: %s", metrics.get("repository_context_available"))
+            logger.info("total_characters: %s", metrics.get("total_characters"))
             return [], metrics
 
         # Get base repo name (e.g. "shriza1991/DeployGuard" -> "DeployGuard")
@@ -48,7 +52,11 @@ class RepositoryEvidenceProvider:
         branch = pull_request.get("head", {}).get("ref") or "main"
 
         # 3. Parse changed files list
-        files = payload.get("files") or []
+        files = (
+            payload.get("changed_files")
+            or payload.get("files")
+            or []
+        )
         changed_files = [
             f.get("filename") for f in files 
             if isinstance(f, dict) and f.get("filename")
@@ -56,6 +64,10 @@ class RepositoryEvidenceProvider:
 
         if not changed_files:
             logger.info("Repository context skipped: no changed files in payload")
+            logger.info("Metrics before return: %s", metrics)
+            logger.info("retrieved_chunks: %s", metrics.get("retrieved_chunks"))
+            logger.info("repository_context_available: %s", metrics.get("repository_context_available"))
+            logger.info("total_characters: %s", metrics.get("total_characters"))
             return [], metrics
 
         # 4. Compile git diff from file patches
@@ -97,6 +109,18 @@ class RepositoryEvidenceProvider:
                 json=request_body,
                 timeout=REPOSITORY_CONTEXT_TIMEOUT
             )
+            logger.info("HTTP Status: %s", response.status_code)
+            logger.info("Response Body: %s", response.text)
+            logger.info("Response Headers: %s", response.headers)
+
+            logger.info(
+                "Repository context request: url=%s",
+                url,
+            )
+            logger.info(
+                "Repository context body:=%s",
+                request_body,
+            )
             latency = (time.perf_counter() - start_time) * 1000
             metrics["retrieval_latency_ms"] = round(latency, 2)
 
@@ -106,13 +130,26 @@ class RepositoryEvidenceProvider:
                     response.status_code,
                     metrics["retrieval_latency_ms"]
                 )
+                logger.info("Metrics before return: %s", metrics)
+                logger.info("retrieved_chunks: %s", metrics.get("retrieved_chunks"))
+                logger.info("repository_context_available: %s", metrics.get("repository_context_available"))
+                logger.info("total_characters: %s", metrics.get("total_characters"))
                 return [], metrics
 
             # Parse results
             result_json = response.json()
+            logger.info("Parsed JSON keys: %s", list(result_json.keys()))
             evidence_list = result_json.get("results")
+            logger.info("Length of results: %s", len(evidence_list) if isinstance(evidence_list, list) else 0)
+            if isinstance(evidence_list, list) and len(evidence_list) > 0:
+                logger.info("First result: %s", evidence_list[0])
+
             if not isinstance(evidence_list, list):
                 logger.warning("Repository context unavailable: malformed response JSON (results is not a list)")
+                logger.info("Metrics before return: %s", metrics)
+                logger.info("retrieved_chunks: %s", metrics.get("retrieved_chunks"))
+                logger.info("repository_context_available: %s", metrics.get("repository_context_available"))
+                logger.info("total_characters: %s", metrics.get("total_characters"))
                 return [], metrics
 
             metrics["retrieved_chunks"] = len(evidence_list)
@@ -123,15 +160,27 @@ class RepositoryEvidenceProvider:
                 len(evidence_list),
                 metrics["retrieval_latency_ms"]
             )
+            logger.info("Metrics before return: %s", metrics)
+            logger.info("retrieved_chunks: %s", metrics.get("retrieved_chunks"))
+            logger.info("repository_context_available: %s", metrics.get("repository_context_available"))
+            logger.info("total_characters: %s", metrics.get("total_characters"))
             return evidence_list, metrics
 
         except requests.Timeout:
             latency = (time.perf_counter() - start_time) * 1000
             metrics["retrieval_latency_ms"] = round(latency, 2)
             logger.warning("Repository context timeout after %s ms", metrics["retrieval_latency_ms"])
+            logger.info("Metrics before return: %s", metrics)
+            logger.info("retrieved_chunks: %s", metrics.get("retrieved_chunks"))
+            logger.info("repository_context_available: %s", metrics.get("repository_context_available"))
+            logger.info("total_characters: %s", metrics.get("total_characters"))
             return [], metrics
         except Exception as exc:
             latency = (time.perf_counter() - start_time) * 1000
             metrics["retrieval_latency_ms"] = round(latency, 2)
             logger.warning("Repository context unavailable: error requesting context service: %s", exc)
+            logger.info("Metrics before return: %s", metrics)
+            logger.info("retrieved_chunks: %s", metrics.get("retrieved_chunks"))
+            logger.info("repository_context_available: %s", metrics.get("repository_context_available"))
+            logger.info("total_characters: %s", metrics.get("total_characters"))
             return [], metrics

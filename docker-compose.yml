@@ -130,3 +130,20 @@ services:
     environment:
       KAFKA_BROKER: kafka:9092
       REDIS_URL: redis://redis:6379/0
+  
+  repository-context-service:
+    build: ./repository-context-service
+    container_name: deployguard_repository_context_service
+
+    ports:
+      - "8003:8003"
+
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333

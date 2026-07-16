@@ -126,24 +126,27 @@ class QdrantService:
         )
         return response is not None and response.status_code in {200, 202}
 
-    def search(self, vector: List[float], repository: str, branch: str, top_k: int) -> List[Dict[str, Any]]:
+    def search(self, vector: List[float], repository: str, branch: str | None = None, top_k: int = 10) -> List[Dict[str, Any]]:
         """
-        Searches the collection for closest vectors matching the repository and branch filters.
+        Searches the collection for closest vectors matching the repository and optional branch filters.
         """
+        must_filters = [
+            {
+                "key": "repository",
+                "match": {"value": repository}
+            }
+        ]
+        if branch:
+            must_filters.append({
+                "key": "branch",
+                "match": {"value": branch}
+            })
+
         payload = {
             "vector": vector,
             "limit": top_k,
             "filter": {
-                "must": [
-                    {
-                        "key": "repository",
-                        "match": {"value": repository}
-                    },
-                    {
-                        "key": "branch",
-                        "match": {"value": branch}
-                    }
-                ]
+                "must": must_filters
             },
             "with_payload": True,
             "with_vector": False

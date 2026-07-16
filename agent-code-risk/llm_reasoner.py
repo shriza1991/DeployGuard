@@ -28,11 +28,14 @@ class LLMReasoner:
     def reason_about_change(self, payload: dict[str, Any], deterministic_result: dict[str, Any]) -> dict[str, Any]:
         # 1. Retrieve repository evidence and metrics (runs AFTER deterministic risk analyzers)
         raw_evidence, metrics = RepositoryEvidenceProvider.get_repository_evidence(payload)
+        logger.info("Length of raw evidence: %s", len(raw_evidence))
+        logger.info("Metrics: %s", metrics)
 
         # 2. Attach metrics to the metadata of the deterministic result
         if "metadata" not in deterministic_result or not isinstance(deterministic_result["metadata"], dict):
             deterministic_result["metadata"] = {}
         deterministic_result["metadata"]["repository_evidence_metrics"] = metrics
+        logger.info("Metadata object: %s", deterministic_result["metadata"])
 
         # 3. Assemble structured context
         assembled_context = assemble_context(payload, deterministic_result, raw_evidence, metrics)

@@ -14,6 +14,8 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     pr = payload.get("pull_request") or {}
     head_commit = payload.get("head_commit") or {}
     files: list[dict[str, Any]] = []
+    if isinstance(payload.get("changed_files"), list):
+        files.extend(payload.get("changed_files", []))
 
     if isinstance(payload.get("files"), list):
         files.extend(payload.get("files", []))

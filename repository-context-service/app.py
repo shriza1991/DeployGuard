@@ -49,6 +49,12 @@ embedding_service = EmbeddingService(
     model_name=settings.embedding_model,
     dimension=settings.embedding_dimension
 )
+
+logger.info("Pre-loading embedding model during startup...")
+
+embedding_service.load_model()
+
+logger.info("Embedding model ready.")
 indexer = Indexer(
     settings=settings,
     clone_service=clone_service,

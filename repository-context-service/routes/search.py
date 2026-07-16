@@ -78,14 +78,80 @@ async def get_repository_context(request: Request, body: ContextRequest):
     try:
         # Embed concatenated query string
         vector = embedding_service.embed_text(query_str)
-        # Search Qdrant
-        hits = qdrant_service.search(
-            vector=vector,
-            repository=body.repository,
-            branch=body.branch,
-            top_k=10 # return top 10 relevant context blocks
-        )
         
+        branch_filter_enabled = bool(body.branch)
+        logger.info("Searching repository context")
+        logger.info(f"Repository: {body.repository}")
+        logger.info(f"Branch: {body.branch}")
+        logger.info(f"Branch filter enabled: {branch_filter_enabled}")
+        logger.info("Top K: 10")
+        
+        fallback_triggered = False
+        hits = []
+        if branch_filter_enabled:
+            hits = qdrant_service.search(
+                vector=vector,
+                repository=body.repository,
+                branch=body.branch,
+                top_k=10
+            )
+
+        if len(hits) == 0:
+            if branch_filter_enabled:
+                logger.info("No branch-specific matches found.")
+                logger.info(f"No branch-specific context found for '{body.repository}'. Falling back to repository-wide search.")
+                logger.info("Retrying repository-wide search...")
+                fallback_triggered = True
+            
+            hits = qdrant_service.search(
+                vector=vector,
+                repository=body.repository,
+                branch=None,
+                top_k=10
+            )
+            
+            # When repository-wide retrieval succeeds, prioritize chunks whose relative_path or filename matches the changed_files list
+            if hits and body.changed_files:
+                changed_files_set = set(body.changed_files)
+                matched_hits = []
+                other_hits = []
+                for hit in hits:
+                    payload = hit.get("payload") or {}
+                    rel_path = payload.get("relative_path")
+                    filename = payload.get("filename")
+                    if rel_path in changed_files_set or filename in changed_files_set:
+                        matched_hits.append(hit)
+                    else:
+                        other_hits.append(hit)
+                hits = matched_hits + other_hits
+
+        # Deduplicate results using relative_path + chunk_index or Qdrant point ID
+        seen = set()
+        deduped_hits = []
+        for hit in hits:
+            point_id = hit.get("id")
+            payload = hit.get("payload") or {}
+            rel_path = payload.get("relative_path", "")
+            chunk_idx = payload.get("chunk_index", 0)
+            
+            dup_key = point_id if point_id else (rel_path, chunk_idx)
+            if dup_key not in seen:
+                seen.add(dup_key)
+                deduped_hits.append(hit)
+        hits = deduped_hits
+
+        retrieved_chunk_count = len(hits)
+        top_score = hits[0].get("score", 0.0) if hits else 0.0
+
+        if fallback_triggered:
+            logger.info(f"Repository-wide search returned {retrieved_chunk_count} chunks.")
+        else:
+            logger.info(f"Search returned {retrieved_chunk_count} chunks.")
+
+        logger.info(f"Fallback triggered: {fallback_triggered}")
+        logger.info(f"Retrieved chunk count: {retrieved_chunk_count}")
+        logger.info(f"Top similarity score: {top_score}")
+
         results = []
         for hit in hits:
             payload = hit.get("payload") or {}

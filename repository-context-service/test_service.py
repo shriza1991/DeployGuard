@@ -228,6 +228,11 @@ class TestIntegrationConnections(unittest.TestCase):
         self.assertTrue(len(results) > 0)
         self.assertEqual(results[0]["payload"]["repository"], "test_repo")
 
+        # Search with branch=None
+        results_no_branch = qdrant_service.search([0.1, 0.2, 0.3, 0.4], "test_repo", None, top_k=2)
+        self.assertTrue(len(results_no_branch) > 0)
+        self.assertEqual(results_no_branch[0]["payload"]["repository"], "test_repo")
+
         # Delete
         delete_ok = qdrant_service.delete_by_repository("test_repo", "test-branch")
         self.assertTrue(delete_ok)
@@ -235,6 +240,112 @@ class TestIntegrationConnections(unittest.TestCase):
         # Confirm deleted (search returns nothing for this repo)
         empty_results = qdrant_service.search([0.1, 0.2, 0.3, 0.4], "test_repo", "test-branch", top_k=2)
         self.assertEqual(len(empty_results), 0)
+
+class DummyState:
+    def __init__(self, embedding_service, qdrant_service):
+        self.embedding_service = embedding_service
+        self.qdrant_service = qdrant_service
+
+class DummyRequest:
+    def __init__(self, app):
+        self.app = app
+
+class TestRepositoryContextRoute(unittest.TestCase):
+    def test_context_fallback_prioritization_and_deduplication(self):
+        from unittest.mock import MagicMock
+        import asyncio
+        from models import ContextRequest
+        from routes.search import get_repository_context
+
+        # Mock embedding service
+        mock_embedding_service = MagicMock()
+        mock_embedding_service.embed_text.return_value = [0.1, 0.2]
+
+        # Mock Qdrant service search behavior
+        # Search returns duplicate chunks and unsorted order to verify prioritization & deduplication
+        mock_hits_fallback = [
+            {
+                "id": "point-1",
+                "score": 0.9,
+                "payload": {
+                    "repository": "test_repo",
+                    "branch": "main",
+                    "relative_path": "other_file.py",
+                    "filename": "other_file.py",
+                    "text": "content 1"
+                }
+            },
+            {
+                "id": "point-2",
+                "score": 0.8,
+                "payload": {
+                    "repository": "test_repo",
+                    "branch": "main",
+                    "relative_path": "changed_file.py",
+                    "filename": "changed_file.py",
+                    "text": "content 2"
+                }
+            },
+            {
+                "id": "point-1",  # Duplicate point-id
+                "score": 0.9,
+                "payload": {
+                    "repository": "test_repo",
+                    "branch": "main",
+                    "relative_path": "other_file.py",
+                    "filename": "other_file.py",
+                    "text": "content 1"
+                }
+            }
+        ]
+
+        mock_qdrant_service = MagicMock()
+        def mock_search(vector, repository, branch, top_k):
+            if branch == "feature-branch":
+                # First search fails (returns zero hits)
+                return []
+            elif branch is None:
+                # Fallback search succeeds
+                return mock_hits_fallback
+            return []
+
+        mock_qdrant_service.search.side_effect = mock_search
+
+        # Construct request & body
+        app_mock = MagicMock()
+        app_mock.state = DummyState(mock_embedding_service, mock_qdrant_service)
+        request_mock = DummyRequest(app_mock)
+
+        body = ContextRequest(
+            repository="test_repo",
+            branch="feature-branch",
+            changed_files=["changed_file.py"],
+            diff="some diff"
+        )
+
+        # Call endpoint handler directly
+        response = asyncio.run(get_repository_context(request_mock, body))
+        results = response.get("results", [])
+
+        # 1. Verification of Fallback search:
+        # qdrant_service.search should be called twice: first with branch, second without branch (None)
+        self.assertEqual(mock_qdrant_service.search.call_count, 2)
+        mock_qdrant_service.search.assert_any_call(
+            vector=[0.1, 0.2], repository="test_repo", branch="feature-branch", top_k=10
+        )
+        mock_qdrant_service.search.assert_any_call(
+            vector=[0.1, 0.2], repository="test_repo", branch=None, top_k=10
+        )
+
+        # 2. Verification of Deduplication:
+        # duplicate point-1 should be removed
+        self.assertEqual(len(results), 2)
+
+        # 3. Verification of Prioritization:
+        # "changed_file.py" should be ranked first because it is in changed_files,
+        # even though "other_file.py" has a higher similarity score (0.9 vs 0.8)
+        self.assertEqual(results[0]["metadata"]["relative_path"], "changed_file.py")
+        self.assertEqual(results[1]["metadata"]["relative_path"], "other_file.py")
 
 if __name__ == "__main__":
     unittest.main()
