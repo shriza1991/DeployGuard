@@ -44,31 +44,42 @@ class CloneService:
 
     def clone_repository(self, repository_url: str, branch: str = "main") -> tuple[str, str]:
         """
-        Clones a repository to a unique local path.
+        Clones a repository to a cached path, or updates an existing clone.
         Returns: (clone_path, head_commit_sha)
         """
         repo_name = get_repo_name(repository_url)
-        unique_id = uuid.uuid4().hex[:8]
-        clone_path = os.path.join(self.clones_dir, f"{repo_name}_{branch}_{unique_id}")
+        clone_path = os.path.join(self.clones_dir, f"{repo_name}_{branch}")
         
+        if os.path.exists(clone_path) and os.path.isdir(os.path.join(clone_path, ".git")):
+            logger.info(f"Reusing cached repository clone at {clone_path}...")
+            try:
+                repo = git.Repo(clone_path)
+                repo.remotes.origin.fetch()
+                repo.git.checkout(branch)
+                repo.git.reset('--hard', f'origin/{branch}')
+                head_commit = repo.head.commit.hexsha
+                logger.info(f"Updated cached clone successfully. HEAD commit: {head_commit}")
+                return clone_path, head_commit
+            except Exception as e:
+                logger.warning(f"Failed to update cached repository: {e}. Clearing and re-cloning...")
+                force_rmtree(clone_path)
+
+        # Clone from scratch
         logger.info(f"Cloning {repository_url} (branch: {branch}) into {clone_path}...")
-        
         try:
             repo = git.Repo.clone_from(
                 repository_url,
                 clone_path,
-                branch=branch,
-                depth=1  # Shallow clone is faster and sufficient for context indexing
+                branch=branch
             )
             head_commit = repo.head.commit.hexsha
             logger.info(f"Cloned successfully. HEAD commit: {head_commit}")
             return clone_path, head_commit
         except Exception as e:
             logger.error(f"Failed to clone repository {repository_url}: {e}")
-            # Try to clean up path if it was partially created
             force_rmtree(clone_path)
             raise e
 
     def cleanup(self, path: str) -> None:
-        """Cleans up the cloned repository folder."""
-        force_rmtree(path)
+        """Keeps the clone for cache reuse."""
+        logger.info(f"Retaining cached repository at {path} for future increments.")

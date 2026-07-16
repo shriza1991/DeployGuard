@@ -1,8 +1,136 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from typing import Any
 from llm.context_assembly import AssembledContext
+
+def generate_chunk_summary(file_path: str, code_content: str) -> str:
+    """
+    Generates a compact summary of the chunk based on its filepath and contents.
+    """
+    # 1. Map of known files/components to clear summaries
+    known_summaries = {
+        "gateway/routers/webhook.py": "Handles webhook ingestion and Redis metadata persistence.",
+        "gateway/redis.py": "Redis client initialization and connection management.",
+        "gateway/app.py": "Gateway FastAPI application setup and middleware.",
+        "gateway/routers/analytics.py": "Handles analytics query endpoints and data aggregation.",
+        "gateway/routers/dashboard.py": "Handles dashboard querying and data serialization.",
+        "gateway/routers/deployments.py": "Handles deployment event querying and lifecycle tracking.",
+        "gateway/routers/incidents.py": "Handles incident querying and reporting endpoints.",
+        "aggregator/redis_store.py": "Aggregator Redis storage and caching mechanisms.",
+        "services/qdrant_service.py": "Manages connection, indexing, and vector searches on Qdrant.",
+        "services/redis_service.py": "Handles connection, indexing status, and manifest caching in Redis.",
+        "services/chunker.py": "Performs file chunking with language-specific heuristics.",
+        "services/embedding_service.py": "Generates sentence embeddings for code search.",
+        "services/indexer.py": "Coordinates repository cloning, chunking, and database indexing.",
+        "services/clone_service.py": "Handles git cloning and branch management.",
+    }
+    
+    # Check exact match or substring match in known_summaries
+    normalized_path = file_path.replace("\\", "/")
+    for path_key, summary in known_summaries.items():
+        if normalized_path == path_key or path_key in normalized_path:
+            return summary
+
+    # 2. General heuristic fallback based on file type and content
+    filename = os.path.basename(file_path)
+    
+    # Try to find class or function names in python
+    classes = re.findall(r"class\s+(\w+)", code_content)
+    functions = re.findall(r"def\s+(\w+)", code_content)
+    
+    if classes or functions:
+        summary_parts = []
+        if classes:
+            summary_parts.append(f"Defines class{'es' if len(classes) > 1 else ''}: {', '.join(classes[:2])}")
+        if functions:
+            summary_parts.append(f"Defines function{'s' if len(functions) > 1 else ''}: {', '.join(functions[:3])}")
+        return " ".join(summary_parts)
+
+    if file_path.endswith(".md"):
+        return f"Documentation file containing information about {filename}."
+    elif file_path.endswith((".yml", ".yaml", ".json")):
+        return f"Configuration file defining settings for {filename}."
+    elif "dockerfile" in filename.lower():
+        return "Dockerfile defining container build steps and environment setup."
+    elif "docker-compose" in filename.lower():
+        return "Docker Compose file defining services and dependencies."
+    
+    return f"Source code file containing implementation details for {filename}."
+
+def generate_repo_context_summary(evidence_list: list[Any]) -> str:
+    """
+    Generates a compact repository context summary including files involved
+    and related components based on the retrieved evidence chunks.
+    """
+    if not evidence_list:
+        return ""
+
+    # Extract unique files involved
+    files_involved = []
+    for ev in evidence_list:
+        file_path = ev.metadata.get("file_path") or "unknown"
+        if file_path not in files_involved:
+            files_involved.append(file_path)
+
+    # Determine related components based on files and text keywords
+    related_components = []
+    for ev in evidence_list:
+        file_path = (ev.metadata.get("file_path") or "").lower()
+        text = ev.text.lower()
+        
+        if "webhook" in file_path or "webhook" in text:
+            related_components.append("Webhook routing")
+            related_components.append("Webhook ingestion")
+        if "redis" in file_path or "redis" in text:
+            related_components.append("Redis lifecycle")
+            related_components.append("Metadata persistence")
+            related_components.append("Redis storage")
+        if "qdrant" in file_path or "qdrant" in text:
+            related_components.append("Qdrant vector search")
+        if "embedding" in file_path or "embedding" in text:
+            related_components.append("Embedding generation")
+        if "indexer" in file_path or "chunker" in file_path:
+            related_components.append("Repository indexing")
+        if "clone" in file_path:
+            related_components.append("Repository cloning")
+        if "search" in file_path or "search" in text:
+            related_components.append("Semantic search routing")
+        if "incident" in file_path or "incident" in text:
+            related_components.append("Incident reporting")
+        if "dashboard" in file_path or "analytics" in file_path:
+            related_components.append("Dashboard querying")
+            related_components.append("Analytics aggregation")
+        if "deployment" in file_path or "deployment" in text:
+            related_components.append("Deployment tracking")
+
+    # Deduplicate related components while preserving order
+    unique_components = []
+    for comp in related_components:
+        if comp not in unique_components:
+            unique_components.append(comp)
+
+    # If no components matched, provide fallback
+    if not unique_components:
+        unique_components.append("General code analysis")
+
+    # Build the summary string
+    lines = [
+        "Repository Context Summary",
+        "",
+        "Files involved:"
+    ]
+    for f in files_involved:
+        lines.append(f)
+    lines.append("")
+    lines.append("Related components:")
+    for c in unique_components:
+        lines.append(c)
+    lines.append("")
+    
+    return "\n".join(lines)
 
 PROMPT_TEMPLATE_ORIGINAL = """You are reviewing a deployment risk assessment for a code change.
 
@@ -163,30 +291,27 @@ def build_prompt(
 
     # 3. Format evidence list if available, or fall back to original template
     if evidence_list:
+        summary_block = generate_repo_context_summary(evidence_list)
+        
         ev_blocks = []
         for ev in evidence_list:
             meta = ev.metadata
-            ev_repo = meta.get("repository") or repository
-            ev_branch = meta.get("branch") or branch
             ev_file = meta.get("file_path") or "unknown"
-            ev_lines = meta.get("lines") or "0-0"
-            ev_kind = meta.get("kind") or "source"
-            ev_score = meta.get("score")
-            ev_score_str = f"{ev_score:.2f}" if ev_score is not None else "N/A"
+            ev_summary = generate_chunk_summary(ev_file, ev.text)
 
             block = (
-                f"Repository: {ev_repo}\n"
-                f"Branch: {ev_branch}\n"
-                f"File: {ev_file}\n"
-                f"Lines: {ev_lines}\n"
-                f"Kind: {ev_kind}\n"
-                f"Similarity Score: {ev_score_str}\n"
-                f"Evidence:\n"
-                f"{ev.text}"
+                f"File:\n{ev_file}\n\n"
+                f"Summary:\n{ev_summary}\n\n"
+                f"Relevant Code:\n{ev.text}"
             )
             ev_blocks.append(block)
 
-        relevant_evidence_text = "\n---\n".join(ev_blocks)
+        evidence_section = "Repository Evidence\n\n" + "\n\n--------------------\n\n".join(ev_blocks)
+        
+        if summary_block:
+            relevant_evidence_text = summary_block + "\n" + evidence_section
+        else:
+            relevant_evidence_text = evidence_section
         
         return PROMPT_TEMPLATE_EXTENDED.format(
             repository=repository,

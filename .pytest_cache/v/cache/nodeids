@@ -1,4 +1,10 @@
 [
+  "agent-code-risk/test_repository_context_integration.py::TestRepositoryContextIntegration::test_client_malformed_json",
+  "agent-code-risk/test_repository_context_integration.py::TestRepositoryContextIntegration::test_client_payload_parsing_and_success",
+  "agent-code-risk/test_repository_context_integration.py::TestRepositoryContextIntegration::test_client_timeout_handling",
+  "agent-code-risk/test_repository_context_integration.py::TestRepositoryContextIntegration::test_context_assembly_limits_and_truncation",
+  "agent-code-risk/test_repository_context_integration.py::TestRepositoryContextIntegration::test_prompt_builder_backward_compatibility",
+  "agent-code-risk/test_repository_context_integration.py::TestRepositoryContextIntegration::test_prompt_builder_extended_formatting",
   "agent-incident-history/test_app.py::test_analyze_incident_history_handles_missing_history",
   "agent-incident-history/test_app.py::test_analyze_incident_history_uses_similarity_and_history_signals",
   "agent-incident-history/test_app.py::test_build_deployment_document_combines_searchable_fields",
@@ -7,5 +13,16 @@
   "agent-incident-history/test_app.py::test_service_scores_critical_rollback_history",
   "agent-incident-history/test_embeddings.py::test_hash_embedding_is_deterministic_and_normalized",
   "agent-incident-history/test_llm_reasoner.py::test_llm_reasoner_falls_back_after_provider_failure",
-  "agent-incident-history/test_vector_search.py::test_vector_search_filters_and_ranks_incidents"
+  "agent-incident-history/test_vector_search.py::test_vector_search_filters_and_ranks_incidents",
+  "repository-context-service/test_service.py::TestChunker::test_chunk_dockerfile",
+  "repository-context-service/test_service.py::TestChunker::test_chunk_markdown",
+  "repository-context-service/test_service.py::TestChunker::test_chunk_source_code",
+  "repository-context-service/test_service.py::TestChunker::test_chunk_terraform",
+  "repository-context-service/test_service.py::TestIntegrationConnections::test_qdrant_integration_if_available",
+  "repository-context-service/test_service.py::TestIntegrationConnections::test_redis_integration_if_available",
+  "repository-context-service/test_service.py::TestRepositoryContextRoute::test_context_fallback_prioritization_and_deduplication",
+  "repository-context-service/test_service.py::TestRepositoryContextRoute::test_context_metrics_thresholding_and_error_handling",
+  "repository-context-service/test_service.py::TestUtilities::test_file_filters",
+  "repository-context-service/test_service.py::TestUtilities::test_language_detector",
+  "repository-context-service/test_service.py::TestUtilities::test_tech_signature_detection"
 ]

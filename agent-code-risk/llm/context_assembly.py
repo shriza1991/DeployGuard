@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+import os
 
 class Evidence:
     def __init__(self, text: str, source: str, metadata: Dict[str, Any]):
@@ -67,7 +68,7 @@ def assemble_context(
 
     # Process raw evidence, limiting to top 10 chunks
     evidence_objects: List[Evidence] = []
-    character_budget = 7000
+    character_budget = int(os.getenv("MAX_CONTEXT_CHARACTERS", "4000"))
     current_char_count = 0
     truncated = False
 

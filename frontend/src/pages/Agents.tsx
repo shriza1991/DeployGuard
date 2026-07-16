@@ -1,66 +1,74 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getAgentStatus } from '../api/dashboard';
+import { getAgentStatus, listDeployments } from '../api/dashboard';
 import { Bot, Terminal, Cpu } from 'lucide-react';
-import './Dashboard.css'; // Unify styles
+import { StatusBadge } from '../components/StatusBadge';
+import { AgentStat } from '../components/AgentStat';
+import './Dashboard.css';
 
-const MOCK_AGENT_EXTRA: Record<string, {
-  lastRun: string;
-  totalAnalyses: number;
-  avgConfidence: string;
-  uptime: string;
-  specs: string;
-  logs: string[];
-}> = {
-  "Code Risk Agent": {
-    lastRun: "2 mins ago",
-    totalAnalyses: 1245,
-    avgConfidence: "94.2%",
-    uptime: "99.98%",
-    specs: "v1.2.0 • 0.2 CPU • 182 MB",
-    logs: [
-      "[INFO] 14:54:26.110 - Ingress pull request webhook payload parsed successfully.",
-      "[INFO] 14:54:26.150 - Deterministic scan complete: 0 modified files found.",
-      "[INFO] 14:54:26.210 - Running Gemini model model-2.5-flash risk assessment...",
-      "[INFO] 14:54:26.230 - Decision compiled. Risk score: 10, Confidence: 0.65."
-    ]
-  },
-  "Infra Risk Agent": {
-    lastRun: "2 mins ago",
-    totalAnalyses: 1245,
-    avgConfidence: "89.5%",
-    uptime: "99.99%",
-    specs: "v1.2.0 • 0.1 CPU • 165 MB",
-    logs: [
-      "[INFO] 14:54:24.780 - Ingress k8s / TF files parsing complete.",
-      "[INFO] 14:54:24.810 - Heuristics checks complete: no root / privileged context drifts.",
-      "[INFO] 14:54:24.902 - Running Gemini infrastructure assessment scan...",
-      "[INFO] 14:54:24.910 - Decision compiled. Risk score: 0, Confidence: 0.65."
-    ]
-  },
-  "Incident History Agent": {
-    lastRun: "2 mins ago",
-    totalAnalyses: 1245,
-    avgConfidence: "92.4%",
-    uptime: "99.95%",
-    specs: "v1.1.4 • 0.4 CPU • 342 MB",
-    logs: [
-      "[INFO] 14:54:21.210 - Connecting to Qdrant vector space instance collection 'incident_history'...",
-      "[INFO] 14:54:21.503 - Fetching document embeddings using sentence-transformer model...",
-      "[INFO] 14:54:21.782 - Vector matches lookup complete. Hits: 0.",
-      "[INFO] 14:54:21.846 - Decision compiled. Risk score: 10, Confidence: 0.35."
-    ]
-  }
+const MOCK_AGENT_LOGS: Record<string, string[]> = {
+  "Code Risk Agent": [
+    "[INFO] Ingress pull request webhook payload parsed successfully.",
+    "[INFO] Deterministic scan complete: 0 modified files found.",
+    "[INFO] Running Gemini model model-2.5-flash risk assessment...",
+    "[INFO] Decision compiled. Risk score: 10, Confidence: 0.65."
+  ],
+  "Infra Risk Agent": [
+    "[INFO] Ingress k8s / TF files parsing complete.",
+    "[INFO] Heuristics checks complete: no root / privileged context drifts.",
+    "[INFO] Running Gemini infrastructure assessment scan...",
+    "[INFO] Decision compiled. Risk score: 0, Confidence: 0.65."
+  ],
+  "Incident History Agent": [
+    "[INFO] Connecting to Qdrant vector space instance collection 'incident_history'...",
+    "[INFO] Fetching document embeddings using sentence-transformer model...",
+    "[INFO] Vector matches lookup complete. Hits: 0.",
+    "[INFO] Decision compiled. Risk score: 10, Confidence: 0.35."
+  ]
 };
 
+function formatRelativeTime(isoStr?: string): string {
+  if (!isoStr) return '';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return new Date(isoStr).toLocaleDateString();
+}
+
 export const Agents: React.FC = () => {
+  // Poll agent status every 5 seconds
   const agentQuery = useQuery({
     queryKey: ['agentStatusList'],
     queryFn: getAgentStatus,
-    refetchInterval: 15_000,
+    refetchInterval: 5000,
+  });
+
+  // Query deployments to compute live stats
+  const deploymentsQuery = useQuery({
+    queryKey: ['deploymentsForAgentStats'],
+    queryFn: () => listDeployments({ page: 1, page_size: 100 }),
+    refetchInterval: 10_000,
   });
 
   const agents = agentQuery.data?.agents ?? [];
+  const deployments = deploymentsQuery.data?.items ?? [];
+  const totalScans = deploymentsQuery.data?.total ?? 0;
+
+  // Compute live confidence mean
+  const confidences = deployments
+    .map(d => d.overall_confidence)
+    .filter(c => c !== undefined && c !== null) as number[];
+  const liveAvgConfidence = confidences.length > 0
+    ? `${Math.round((confidences.reduce((sum, val) => sum + val, 0) / confidences.length) * 100)}%`
+    : '--';
+
+  // Compute relative time of last analysis run
+  const liveLastRun = deployments.length > 0 && deployments[0].generated_at
+    ? formatRelativeTime(deployments[0].generated_at)
+    : '--';
 
   return (
     <div className="dashboard-container fade-in">
@@ -87,65 +95,86 @@ export const Agents: React.FC = () => {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px' }}>
           
           {/* Agent Cards Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '24px' }}>
             {agents.map((agent) => {
-              const extra = MOCK_AGENT_EXTRA[agent.name] || {
-                lastRun: 'unknown',
-                totalAnalyses: 0,
-                avgConfidence: '0.0%',
-                uptime: '100%',
-                specs: 'N/A',
-                logs: []
-              };
+              const logs = MOCK_AGENT_LOGS[agent.name] || [];
 
               return (
-                <div key={agent.name} className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <div 
+                  key={agent.name} 
+                  className="glass-panel" 
+                  style={{ 
+                    padding: '24px', 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    justifyContent: 'space-between',
+                    minHeight: '480px',
+                    boxSizing: 'border-box'
+                  }}
+                >
                   
                   {/* Card top info */}
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                        <Cpu className="text-indigo" size={20} />
+                      <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                        <div style={{ 
+                          background: 'rgba(192, 193, 255, 0.05)', 
+                          border: '1px solid rgba(192, 193, 255, 0.1)', 
+                          padding: '8px', 
+                          borderRadius: '6px',
+                          color: 'var(--accent-cyan)'
+                        }}>
+                          <Cpu size={20} />
+                        </div>
                         <div>
-                          <h3 style={{ fontSize: '15px', color: '#fff', fontWeight: 600 }}>{agent.name}</h3>
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{extra.specs}</span>
+                          <h3 style={{ fontSize: '15px', color: '#fff', fontWeight: 600, margin: 0 }}>{agent.name}</h3>
+                          <span className="font-mono" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                            Region: {agent.region || 'local'}
+                          </span>
                         </div>
                       </div>
-                      <span className="confidence-badge font-mono" style={{ background: agent.status === 'online' ? 'var(--color-safe-bg)' : 'var(--color-review-bg)', color: agent.status === 'online' ? 'var(--color-safe)' : 'var(--color-review)', fontSize: '10px' }}>
-                        {agent.status.toUpperCase()}
-                      </span>
+                      <StatusBadge status={agent.status} />
                     </div>
 
-                    {/* Stats table */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px', borderTop: '1px solid var(--panel-border)', paddingTop: '16px' }}>
-                      <div>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>LAST RUN</span>
-                        <p className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 'bold', marginTop: '2px' }}>{extra.lastRun}</p>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>LATENCY</span>
-                        <p className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 'bold', marginTop: '2px' }}>{agent.latency_ms} ms</p>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>TOTAL ANALYSES</span>
-                        <p className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 'bold', marginTop: '2px' }}>{extra.totalAnalyses}</p>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>AVG CONFIDENCE</span>
-                        <p className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 'bold', marginTop: '2px' }}>{extra.avgConfidence}</p>
-                      </div>
+                    {/* Stats Grid */}
+                    <div style={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: '1fr 1fr', 
+                      gap: '16px 12px', 
+                      marginBottom: '20px', 
+                      borderTop: '1px solid var(--panel-border)', 
+                      paddingTop: '16px' 
+                    }}>
+                      <AgentStat label="Last Run" value={liveLastRun} />
+                      <AgentStat label="Average Latency" value={`${agent.latency_ms} ms`} />
+                      <AgentStat label="Analysis Count" value={totalScans > 0 ? totalScans.toLocaleString() : '--'} />
+                      <AgentStat label="Average Confidence" value={liveAvgConfidence} />
+                      
+                      {/* Hardware / Environment (unexposed in API - gracefully show '--') */}
+                      <AgentStat label="Version" value="--" />
+                      <AgentStat label="Uptime" value="--" />
+                      <AgentStat label="CPU Usage" value="--" />
+                      <AgentStat label="Memory Usage" value="--" />
                     </div>
                   </div>
 
                   {/* Terminal Stds / Logs block */}
                   <div style={{ marginTop: 'auto' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', color: 'var(--text-secondary)' }}>
-                      <Terminal size={12} />
-                      <span style={{ fontSize: '11px', fontWeight: 600 }} className="font-mono">STDERR/STDOUT OUTPUT:</span>
+                      <Terminal size={12} style={{ color: 'var(--accent-cyan)' }} />
+                      <span style={{ fontSize: '11px', fontWeight: 600 }} className="font-mono">CONSOLE LOGS:</span>
                     </div>
-                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--panel-border)', padding: '10px', borderRadius: '4px', height: '120px', overflowY: 'auto' }} className="font-mono">
-                      {extra.logs.map((log, idx) => (
-                        <p key={idx} style={{ fontSize: '10px', color: '#88f', margin: '2px 0', lineHeight: 1.4 }}>
+                    <div style={{ 
+                      background: 'var(--bg-secondary)', 
+                      border: '1px solid var(--panel-border)', 
+                      padding: '12px', 
+                      borderRadius: '4px', 
+                      height: '130px', 
+                      overflowY: 'auto',
+                      boxSizing: 'border-box'
+                    }} className="font-mono">
+                      {logs.map((log, idx) => (
+                        <p key={idx} style={{ fontSize: '10px', color: 'rgba(192, 193, 255, 0.7)', margin: '4px 0', lineHeight: 1.4 }}>
                           {log}
                         </p>
                       ))}
@@ -163,4 +192,5 @@ export const Agents: React.FC = () => {
     </div>
   );
 };
+
 export default Agents;

@@ -238,13 +238,22 @@ class TestIntegrationConnections(unittest.TestCase):
         self.assertTrue(delete_ok)
 
         # Confirm deleted (search returns nothing for this repo)
-        empty_results = qdrant_service.search([0.1, 0.2, 0.3, 0.4], "test_repo", "test-branch", top_k=2)
+        import time
+        for _ in range(5):
+            empty_results = qdrant_service.search([0.1, 0.2, 0.3, 0.4], "test_repo", "test-branch", top_k=2)
+            if len(empty_results) == 0:
+                break
+            time.sleep(0.2)
         self.assertEqual(len(empty_results), 0)
 
 class DummyState:
-    def __init__(self, embedding_service, qdrant_service):
+    def __init__(self, embedding_service, qdrant_service, settings=None):
         self.embedding_service = embedding_service
         self.qdrant_service = qdrant_service
+        from config import get_settings
+        self.settings = settings or get_settings()
+        from unittest.mock import MagicMock
+        self.redis_service = MagicMock()
 
 class DummyRequest:
     def __init__(self, app):
@@ -326,6 +335,7 @@ class TestRepositoryContextRoute(unittest.TestCase):
         # Call endpoint handler directly
         response = asyncio.run(get_repository_context(request_mock, body))
         results = response.get("results", [])
+        metrics = response.get("metrics", {})
 
         # 1. Verification of Fallback search:
         # qdrant_service.search should be called twice: first with branch, second without branch (None)
@@ -346,6 +356,170 @@ class TestRepositoryContextRoute(unittest.TestCase):
         # even though "other_file.py" has a higher similarity score (0.9 vs 0.8)
         self.assertEqual(results[0]["metadata"]["relative_path"], "changed_file.py")
         self.assertEqual(results[1]["metadata"]["relative_path"], "other_file.py")
+
+        # 4. Metrics Verification:
+        self.assertTrue(metrics.get("repository_context_available"))
+        self.assertTrue(metrics.get("branch_filter_used"))
+        self.assertTrue(metrics.get("fallback_used"))
+        self.assertEqual(metrics.get("top_similarity"), 0.9)
+        self.assertEqual(metrics.get("average_similarity"), 0.85)
+        self.assertEqual(metrics.get("unique_files"), 2)
+
+    def test_context_metrics_thresholding_and_error_handling(self):
+        from unittest.mock import MagicMock
+        import asyncio
+        from models import ContextRequest
+        from routes.search import get_repository_context
+        from config import Settings
+
+        # Custom settings with min_similarity = 0.85 (should drop the 0.80 hit)
+        custom_settings = Settings(
+            min_similarity=0.85,
+            top_k_default=5,
+            top_k_max=10
+        )
+
+        mock_embedding_service = MagicMock()
+        mock_embedding_service.embed_text.return_value = [0.1, 0.2]
+
+        mock_hits = [
+            {
+                "id": "p-1",
+                "score": 0.90,
+                "payload": {"repository": "test_repo", "branch": "main", "relative_path": "a.py", "text": "a"}
+            },
+            {
+                "id": "p-2",
+                "score": 0.80, # below threshold 0.85
+                "payload": {"repository": "test_repo", "branch": "main", "relative_path": "b.py", "text": "b"}
+            }
+        ]
+
+        mock_qdrant_service = MagicMock()
+        mock_qdrant_service.search.return_value = mock_hits
+
+        app_mock = MagicMock()
+        app_mock.state = DummyState(mock_embedding_service, mock_qdrant_service, settings=custom_settings)
+        request_mock = DummyRequest(app_mock)
+
+        body = ContextRequest(
+            repository="test_repo",
+            branch="main",
+            changed_files=["a.py"],
+            diff="diff"
+        )
+
+        # Call endpoint handler directly
+        response = asyncio.run(get_repository_context(request_mock, body))
+        results = response.get("results", [])
+        metrics = response.get("metrics", {})
+
+        # Should only return 1 hit (score 0.90 >= 0.85)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["score"], 0.90)
+        self.assertEqual(metrics["top_similarity"], 0.90)
+
+        # Verify error handling
+        mock_qdrant_service.search.side_effect = Exception("Qdrant offline!")
+        response_err = asyncio.run(get_repository_context(request_mock, body))
+        self.assertEqual(response_err.get("results"), [])
+        self.assertFalse(response_err.get("metrics", {}).get("repository_context_available"))
+
+class TestPhase2Features(unittest.TestCase):
+    def test_python_chunker(self):
+        py_code = """
+# Header comment
+import os
+
+@decorator
+class MyClass:
+    def method(self):
+        pass
+
+def top_func():
+    pass
+"""
+        chunker = Chunker(chunk_size_tokens=5)
+        chunks = chunker.chunk_file(py_code, "test.py", "python")
+        self.assertTrue(len(chunks) >= 2)
+        
+    def test_jsonc_cleaner(self):
+        jsonc = """
+        {
+            // single line comment
+            "key": "value", /* block comment */
+            "arr": [1, 2,], // trailing comma
+        }
+        """
+        chunker = Chunker()
+        cleaned = chunker.clean_json_content(jsonc)
+        parsed = json.loads(cleaned)
+        self.assertEqual(parsed["key"], "value")
+        self.assertEqual(parsed["arr"], [1, 2])
+
+    def test_heuristic_scoring(self):
+        from routes.search import compute_ranking_score_and_reason
+        from config import Settings
+        
+        settings = Settings(
+            weight_semantic=0.75,
+            bonus_exact_file=0.10,
+            bonus_same_dir=0.05,
+            bonus_same_module=0.05,
+            bonus_config_file=0.05,
+            penalty_test_file=0.10,
+            penalty_mock_generated=0.15,
+            penalty_tiny_chunk=0.10
+        )
+        
+        hit = {
+            "score": 0.80,
+            "payload": {
+                "relative_path": "gateway/redis.py",
+                "filename": "redis.py",
+                "directory": "gateway",
+                "kind": "source",
+                "text": "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11"
+            }
+        }
+        score, reason = compute_ranking_score_and_reason(hit, ["gateway/redis.py"], {}, settings)
+        self.assertAlmostEqual(score, 0.80)
+        self.assertEqual(reason, "Exact changed file")
+
+        hit_test = {
+            "score": 0.80,
+            "payload": {
+                "relative_path": "tests/test_redis.py",
+                "filename": "test_redis.py",
+                "directory": "tests",
+                "kind": "test",
+                "text": "def test_redis(): pass"
+            }
+        }
+        score_test, reason_test = compute_ranking_score_and_reason(hit_test, ["gateway/redis.py"], {}, settings)
+        self.assertAlmostEqual(score_test, 0.40)
+        self.assertEqual(reason_test, "Semantic similarity (Test file)")
+        
+    def test_framework_and_architecture_detection(self):
+        from services.indexer import detect_frameworks_from_files, build_architecture_metadata
+        files_set = {"requirements.txt", "Dockerfile", "package.json"}
+        frameworks = detect_frameworks_from_files(files_set)
+        self.assertIn("Python Project", frameworks)
+        self.assertIn("Node.js Project", frameworks)
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dc = {
+                "services": {
+                    "gateway": {"image": "python"},
+                    "aggregator": {"image": "python"}
+                }
+            }
+            with open(os.path.join(tmpdir, "docker-compose.yml"), "w") as f:
+                import yaml
+                yaml.dump(dc, f)
+            arch = build_architecture_metadata(tmpdir, ["python"])
+            self.assertIn("gateway", arch["services"])
+            self.assertEqual(arch["message_bus"], "None")
 
 if __name__ == "__main__":
     unittest.main()

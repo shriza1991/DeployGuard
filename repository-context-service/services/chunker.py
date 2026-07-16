@@ -28,7 +28,9 @@ class Chunker:
         _, ext = os.path.splitext(filename)
 
         try:
-            if ext == ".md":
+            if ext == ".py" or language.lower() == "python":
+                return self.chunk_python(content)
+            elif ext == ".md":
                 return self.chunk_markdown(content)
             elif ext in {".json", ".yml", ".yaml"}:
                 return self.chunk_json_yaml(content, ext)
@@ -104,37 +106,40 @@ class Chunker:
             
         return chunks
 
-    def chunk_markdown(self, content: str) -> List[Dict[str, Any]]:
+    def _group_blocks_into_chunks(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Paragraph-based chunker. Groups markdown paragraphs to preserve context.
+        Groups small logical blocks into chunks of ~chunk_size_tokens.
+        Falls back to line-based chunking for any single block exceeding limits.
         """
-        # Split by double newlines or similar
-        paragraphs = re.split(r'\n\s*\n', content)
+        if not blocks:
+            return []
+            
         chunks = []
-        
-        current_paragraphs = []
+        current_group = []
         current_tokens = 0
-        start_line = 1
+        group_start = 1
         chunk_idx = 0
         
-        # Track line numbers manually
-        para_line_ranges = []
-        running_line = 1
-        for p in paragraphs:
-            p_lines = p.count('\n') + 1
-            para_line_ranges.append((running_line, running_line + p_lines - 1))
-            running_line += p_lines + 1 # +1 for the double newline split
+        for idx, block in enumerate(blocks):
+            block_text = block["text"]
+            tokens = estimate_tokens(block_text)
             
-        i = 0
-        while i < len(paragraphs):
-            para = paragraphs[i]
-            tokens = estimate_tokens(para)
-            
-            # If paragraph itself is huge, chunk it line-by-line as a fallback
-            if tokens > self.chunk_size_tokens and not current_paragraphs:
-                sub_chunks = self.chunk_source_code(para)
-                # Offset line numbers
-                offset = para_line_ranges[i][0] - 1
+            if tokens > self.chunk_size_tokens:
+                # Flush existing group first
+                if current_group:
+                    chunks.append({
+                        "text": "".join(current_group),
+                        "start_line": group_start,
+                        "end_line": blocks[idx - 1]["end_line"],
+                        "chunk_index": chunk_idx
+                    })
+                    chunk_idx += 1
+                    current_group = []
+                    current_tokens = 0
+                
+                # Split the large block using sliding window
+                sub_chunks = self.chunk_source_code(block_text)
+                offset = block["start_line"] - 1
                 for sc in sub_chunks:
                     chunks.append({
                         "text": sc["text"],
@@ -143,78 +148,145 @@ class Chunker:
                         "chunk_index": chunk_idx
                     })
                     chunk_idx += 1
-                i += 1
-                start_line = para_line_ranges[i][0] if i < len(paragraphs) else running_line
-                continue
-
-            current_paragraphs.append(para)
-            current_tokens += tokens
-            
-            if current_tokens >= self.chunk_size_tokens or i == len(paragraphs) - 1:
-                end_line = para_line_ranges[i][1]
-                chunks.append({
-                    "text": "\n\n".join(current_paragraphs),
-                    "start_line": start_line,
-                    "end_line": end_line,
-                    "chunk_index": chunk_idx
-                })
-                chunk_idx += 1
                 
-                if i == len(paragraphs) - 1:
-                    break
-                    
-                # Backtrack to overlap (keep last 1-2 paragraphs if appropriate)
-                backtrack_count = 0
-                backtrack_tokens = 0
-                for r_para in reversed(current_paragraphs):
-                    r_tokens = estimate_tokens(r_para)
-                    if backtrack_tokens + r_tokens > self.overlap_tokens:
-                        break
-                    backtrack_tokens += r_tokens
-                    backtrack_count += 1
-                
-                # Make sure we don't backtrack all paragraphs
-                if backtrack_count >= len(current_paragraphs):
-                    backtrack_count = len(current_paragraphs) - 1
-                    
-                if backtrack_count > 0:
-                    i = i - backtrack_count + 1
-                else:
-                    i += 1
-                
-                current_paragraphs = []
-                current_tokens = 0
-                start_line = para_line_ranges[i][0] if i < len(paragraphs) else running_line
+                if idx + 1 < len(blocks):
+                    group_start = blocks[idx + 1]["start_line"]
             else:
-                i += 1
+                if not current_group:
+                    group_start = block["start_line"]
+                current_group.append(block_text)
+                current_tokens += tokens
                 
+                if current_tokens >= self.chunk_size_tokens:
+                    chunks.append({
+                        "text": "".join(current_group),
+                        "start_line": group_start,
+                        "end_line": block["end_line"],
+                        "chunk_index": chunk_idx
+                    })
+                    chunk_idx += 1
+                    current_group = []
+                    current_tokens = 0
+                    
+        if current_group:
+            chunks.append({
+                "text": "".join(current_group),
+                "start_line": group_start,
+                "end_line": blocks[-1]["end_line"],
+                "chunk_index": chunk_idx
+            })
+            
         return chunks
+
+    def chunk_python(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Specialized Python chunker. Splits code by top-level class or function definition blocks
+        before checking token window limits.
+        """
+        lines = content.splitlines(keepends=True)
+        blocks = []
+        current_block = []
+        start_line = 1
+        
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            is_decorator = line.startswith('@')
+            is_definition = line.startswith('class ') or line.startswith('def ')
+            
+            if (is_decorator or is_definition) and not line.startswith((' ', '\t')):
+                if current_block:
+                    blocks.append({
+                        "text": "".join(current_block),
+                        "start_line": start_line,
+                        "end_line": idx
+                    })
+                    current_block = []
+                start_line = idx + 1
+            current_block.append(line)
+            
+        if current_block:
+            blocks.append({
+                "text": "".join(current_block),
+                "start_line": start_line,
+                "end_line": len(lines)
+            })
+            
+        return self._group_blocks_into_chunks(blocks)
+
+    def chunk_markdown(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Specialized Markdown chunker. Splits content by section headings.
+        """
+        lines = content.splitlines(keepends=True)
+        blocks = []
+        current_block = []
+        start_line = 1
+        
+        for idx, line in enumerate(lines):
+            if line.startswith('#') and (' ' in line or '\t' in line):
+                header_match = re.match(r'^#+\s', line)
+                if header_match:
+                    if current_block:
+                        blocks.append({
+                            "text": "".join(current_block),
+                            "start_line": start_line,
+                            "end_line": idx
+                        })
+                        current_block = []
+                    start_line = idx + 1
+            current_block.append(line)
+            
+        if current_block:
+            blocks.append({
+                "text": "".join(current_block),
+                "start_line": start_line,
+                "end_line": len(lines)
+            })
+            
+        return self._group_blocks_into_chunks(blocks)
+
+    def clean_json_content(self, content: str) -> str:
+        """Strips single/block comments and trailing commas for JSONC/JSON5 parsing."""
+        # Strip block comments /* ... */
+        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+        # Strip single line comments // ...
+        content = re.sub(r'//.*', '', content)
+        # Strip trailing commas
+        content = re.sub(r',\s*([\]}])', r'\1', content)
+        return content
 
     def chunk_json_yaml(self, content: str, ext: str) -> List[Dict[str, Any]]:
         """
         Parses JSON or YAML files and chunks them by preserving complete structures.
+        Supports comments and trailing commas for JSON.
         """
         parsed_data = None
         if ext == ".json":
-            parsed_data = json.loads(content)
+            try:
+                cleaned = self.clean_json_content(content)
+                parsed_data = json.loads(cleaned)
+            except Exception:
+                try:
+                    parsed_data = yaml.safe_load(content)
+                except Exception:
+                    pass
         else:
-            parsed_data = yaml.safe_load(content)
+            try:
+                parsed_data = yaml.safe_load(content)
+            except Exception:
+                pass
 
-        # If data is not a dict or list, fall back
         if not isinstance(parsed_data, (dict, list)):
             return self.chunk_source_code(content)
 
         blocks = []
         if isinstance(parsed_data, list):
-            # Serialize each item
             for item in parsed_data:
                 blocks.append(json.dumps(item, indent=2))
         else:
-            # Serialize each top-level key-value pair
             for key, val in parsed_data.items():
                 blocks.append(json.dumps({key: val}, indent=2))
 
-        # Group blocks together into chunks
         chunks = []
         current_blocks = []
         current_tokens = 0
@@ -223,11 +295,10 @@ class Chunker:
         for block in blocks:
             tokens = estimate_tokens(block)
             if tokens > self.chunk_size_tokens:
-                # If a single object is larger than chunk limit, split it
                 if current_blocks:
                     chunks.append({
                         "text": "\n\n".join(current_blocks),
-                        "start_line": 1, # approximate line numbers for parsed structures
+                        "start_line": 1,
                         "end_line": 1,
                         "chunk_index": chunk_idx
                     })
@@ -239,8 +310,8 @@ class Chunker:
                 for sc in sub_chunks:
                     chunks.append({
                         "text": sc["text"],
-                        "start_line": 1,
-                        "end_line": 1,
+                        "start_line": sc["start_line"],
+                        "end_line": sc["end_line"],
                         "chunk_index": chunk_idx
                     })
                     chunk_idx += 1
@@ -266,18 +337,13 @@ class Chunker:
                 "chunk_index": chunk_idx
             })
             
-        # Re-assign line numbers by doing string searching in the original content if possible
-        # Or simply assign lines by parsing their positions. For simplicity and robustness,
-        # we can locate the blocks in the file content.
         for ch in chunks:
-            # Try to find the lines containing the first 100 chars of the block text
             search_prefix = ch["text"][:100].strip()
             if search_prefix:
                 lines = content.splitlines()
                 for idx, line in enumerate(lines):
                     if search_prefix in line:
                         ch["start_line"] = idx + 1
-                        # find the end line based on line count of block
                         ch["end_line"] = min(len(lines), idx + ch["text"].count('\n') + 1)
                         break
         return chunks

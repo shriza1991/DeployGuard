@@ -8,6 +8,7 @@ import {
   listDeployments,
   type DeploymentSummary,
 } from '../api/dashboard';
+import { getRepositoryStatus, getRepositoryManifest } from '../api/repository';
 import {
   Shield,
   Activity,
@@ -17,7 +18,6 @@ import {
   ExternalLink,
   ChevronRight,
   Terminal,
-  FileText,
   BarChart3,
   Rocket,
   History,
@@ -27,10 +27,14 @@ import {
   XCircle,
   Zap,
   RefreshCw,
+  Search,
 } from 'lucide-react';
+import { StatusBadge } from '../components/StatusBadge';
+import { MetricCard } from '../components/MetricCard';
+import { QuickActionCard } from '../components/QuickActionCard';
+import { HealthIndicator } from '../components/HealthIndicator';
 import './Dashboard.css';
 
-// --- Toast Notification Component ---
 interface Toast {
   id: string;
   message: string;
@@ -44,16 +48,6 @@ const PIPELINE_SERVICES = [
   { key: 'gateway', label: 'Gateway', icon: Activity },
   { key: 'agents', label: 'Agents', icon: Bot },
   { key: 'aggregator', label: 'Aggregator', icon: Shield },
-];
-
-const QUICK_ACTIONS = [
-  { label: 'Run Simulation', icon: Terminal, path: '/simulator', primary: true },
-  { label: 'View Deployments', icon: Rocket, path: '/deployments', primary: false },
-  { label: 'Analytics', icon: BarChart3, path: '/analytics', primary: false },
-  { label: 'Generate Report', icon: FileText, path: '/reports', primary: false },
-  { label: 'Incident History', icon: History, path: '/incidents', primary: false },
-  { label: 'Agent Status', icon: Bot, path: '/agents', primary: false },
-  { label: 'System Health', icon: Activity, path: '/system-health', primary: false },
 ];
 
 function decisionTypeToToastType(decision: string): Toast['type'] {
@@ -81,6 +75,9 @@ export const Dashboard: React.FC = () => {
   const prevDecisions = useRef<Record<string, string>>({});
   const lastRefresh = useRef<Date>(new Date());
 
+  const repoName = 'shriza1991/DeployGuard';
+  const branchName = 'main';
+
   const showToast = useCallback((message: string, type: Toast['type']) => {
     const id = Math.random().toString(36).slice(2);
     setToasts(prev => [...prev, { id, message, type }]);
@@ -93,7 +90,7 @@ export const Dashboard: React.FC = () => {
   const healthQuery = useQuery({
     queryKey: ['aggregatorHealth'],
     queryFn: getAggregatorHealth,
-    refetchInterval: 15_000,
+    refetchInterval: 5000, // Faster polling (5 seconds)
   });
   const backendOnline = healthQuery.data?.status === 'healthy';
 
@@ -105,11 +102,22 @@ export const Dashboard: React.FC = () => {
 
   const deploymentsQuery = useQuery({
     queryKey: ['dashboardDeployments'],
-    queryFn: () => listDeployments({ page: 1, page_size: 8 }),
-    refetchInterval: 10_000,
+    queryFn: () => listDeployments({ page: 1, page_size: 6 }),
+    refetchInterval: 5000, // Poll recent deployments every 5s
   });
 
-  // React Query v5 alignment: Handle side effects via useEffect instead of onSuccess
+  const repoStatusQuery = useQuery({
+    queryKey: ['repoStatus', repoName, branchName],
+    queryFn: () => getRepositoryStatus(repoName, branchName),
+    refetchInterval: 5000,
+  });
+
+  const repoManifestQuery = useQuery({
+    queryKey: ['repoManifest', repoName, branchName],
+    queryFn: () => getRepositoryManifest(repoName, branchName),
+    refetchInterval: 10000,
+  });
+
   React.useEffect(() => {
     if (deploymentsQuery.data) {
       lastRefresh.current = new Date();
@@ -137,7 +145,7 @@ export const Dashboard: React.FC = () => {
   const agentStatusQuery = useQuery({
     queryKey: ['agentStatus'],
     queryFn: getAgentStatus,
-    refetchInterval: 15_000,
+    refetchInterval: 5000, // Poll agents status every 5 seconds
   });
 
   const deploymentsList = (deploymentsQuery.data?.items ?? []) as DeploymentSummary[];
@@ -150,8 +158,6 @@ export const Dashboard: React.FC = () => {
   const avgRisk = metricsQuery.data?.avgRisk ?? 0;
   const avgConfidence = metricsQuery.data?.avgConfidence ?? 0;
 
-
-  // Pipeline health derivation
   const agentsOnline = agentStatusQuery.data?.agents?.every(a => a.status === 'online') ?? false;
   const agentsDegraded = agentStatusQuery.data?.agents?.some(a => a.status === 'degraded') ?? false;
 
@@ -167,11 +173,19 @@ export const Dashboard: React.FC = () => {
     }
     if (key === 'aggregator') return backendOnline ? 'online' : 'offline';
     if (key === 'kafka' || key === 'redis' || key === 'qdrant' || key === 'gateway') {
-      // These are always assumed online if aggregator is online
       return backendOnline ? 'online' : 'offline';
     }
     return 'unknown';
   }
+
+  const quickActionsList = [
+    { label: 'Run Simulation', description: 'Simulate deployment webhook scans', icon: Terminal, path: '/simulator', primary: true },
+    { label: 'Repo Search', description: 'Query repo vectors for logic patterns', icon: Search, path: '/search', primary: false },
+    { label: 'View Analytics', description: 'Review security statistics & risk metrics', icon: BarChart3, path: '/analytics', primary: false },
+    { label: 'Incident History', description: 'Inspect past production outage rollbacks', icon: History, path: '/incidents', primary: false },
+    { label: 'Agent Status', description: 'Monitor worker logs & health endpoints', icon: Bot, path: '/agents', primary: false },
+    { label: 'System Health', description: 'Track status of Redis, Qdrant, and Kafka', icon: Activity, path: '/system-health', primary: false },
+  ];
 
   return (
     <div className="dashboard-container fade-in">
@@ -189,7 +203,7 @@ export const Dashboard: React.FC = () => {
         ))}
       </div>
 
-      {/* ====== SECTION 1: HEADER ====== */}
+      {/* ====== SECTION 1: HEADER & SYSTEM HEALTH ====== */}
       <div className="dashboard-header-container">
         <div className="dashboard-header-left">
           <div className="title-area">
@@ -204,19 +218,17 @@ export const Dashboard: React.FC = () => {
         </div>
 
         <div className="dashboard-header-right">
-          {/* System status */}
-          <div className={`system-status-chip ${backendOnline ? 'online' : 'offline'}`}>
-            <span className={`status-dot ${backendOnline ? 'pulse' : ''}`} />
-            <span>{backendOnline ? 'All Systems Online' : 'Backend Unreachable'}</span>
-          </div>
+          <HealthIndicator
+            status={backendOnline ? 'online' : 'offline'}
+            label={backendOnline ? 'All Systems Online' : 'Backend Unreachable'}
+            type="chip"
+          />
 
-          {/* Last sync */}
           <div className="last-sync-chip">
             <RefreshCw size={11} />
             <span>Synced {formatRelativeTime(lastRefresh.current.toISOString())}</span>
           </div>
 
-          {/* Time range selector */}
           <div className="timeframe-selector">
             {(['24h', '7d', '30d'] as const).map(p => (
               <button
@@ -231,161 +243,164 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* ====== SECTION 2: LIVE SECURITY SUMMARY (KPI GRID) ====== */}
+      {/* ====== SECTION 2: REPOSITORY CONTEXT & QUICK ACTIONS ====== */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+        
+        {/* Repository Context Card */}
+        <div className="section-block">
+          <div className="section-header">
+            <span className="section-label">Repository Context</span>
+          </div>
+          <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Repository</span>
+              <span className="font-mono" style={{ fontSize: '13px', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                {repoName}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Status</span>
+              <StatusBadge status={repoStatusQuery.data?.status || 'NOT_INDEXED'} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Files Indexed</span>
+              <span className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>
+                {repoManifestQuery.data?.file_count !== undefined ? repoManifestQuery.data.file_count : '--'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Lines of Code</span>
+              <span className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>
+                {repoManifestQuery.data?.lines_of_code !== undefined ? repoManifestQuery.data.lines_of_code.toLocaleString() : '--'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Frameworks</span>
+              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {repoManifestQuery.data?.frameworks && repoManifestQuery.data.frameworks.length > 0 ? (
+                  repoManifestQuery.data.frameworks.map(fw => (
+                    <span key={fw} className="agent-chip font-mono" style={{ margin: 0, padding: '1px 6px', fontSize: '9px' }}>
+                      {fw}
+                    </span>
+                  ))
+                ) : (
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>--</span>
+                )}
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Last Indexed</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                {repoManifestQuery.data?.last_indexed_at ? formatRelativeTime(repoManifestQuery.data.last_indexed_at) : '--'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Actions Grid */}
+        <div className="section-block">
+          <div className="section-header">
+            <span className="section-label">Quick Actions</span>
+          </div>
+          <div className="quick-actions-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+            {quickActionsList.map(action => (
+              <QuickActionCard
+                key={action.path}
+                label={action.label}
+                description={action.description}
+                icon={action.icon}
+                onClick={() => navigate(action.path)}
+                primary={action.primary}
+              />
+            ))}
+          </div>
+        </div>
+
+      </div>
+
+      {/* ====== SECTION 3: RECENT DEPLOYMENTS (LATEST DECISIONS) ====== */}
       <div className="section-block">
         <div className="section-header">
-          <span className="section-label">Live Security Summary</span>
-          <span className="section-period">{timePeriod}</span>
+          <span className="section-label">Latest Deployment Decisions</span>
+          <button
+            onClick={() => navigate('/deployments')}
+            className="section-action-btn"
+          >
+            View All <ChevronRight size={12} />
+          </button>
         </div>
-        <div className="kpi-grid-6">
-          {/* Total */}
-          <div className="kpi-card glass-panel kpi-card--neutral">
-            <span className="kpi-title">TOTAL DEPLOYMENTS</span>
-            <div className="kpi-value font-mono">{total}</div>
-            <p className="kpi-sub">Evaluated in window</p>
-          </div>
 
-          {/* Blocked */}
-          <div className={`kpi-card glass-panel kpi-card--${blocked > 0 ? 'danger' : 'neutral'}`}>
-            <span className="kpi-title">BLOCKED</span>
-            <div className="kpi-value font-mono" style={{ color: blocked > 0 ? 'var(--color-block)' : undefined }}>{blocked}</div>
-            <p className="kpi-sub">{blocked > 0 ? 'Require immediate action' : 'No blocks in period'}</p>
-          </div>
-
-          {/* Under Review */}
-          <div className={`kpi-card glass-panel kpi-card--${review > 0 ? 'warn' : 'neutral'}`}>
-            <span className="kpi-title">UNDER REVIEW</span>
-            <div className="kpi-value font-mono" style={{ color: review > 0 ? 'var(--color-review)' : undefined }}>{review}</div>
-            <p className="kpi-sub">Awaiting human review</p>
-          </div>
-
-          {/* Safe */}
-          <div className="kpi-card glass-panel kpi-card--safe">
-            <span className="kpi-title">SAFE</span>
-            <div className="kpi-value font-mono" style={{ color: 'var(--color-safe)' }}>{safe}</div>
-            <p className="kpi-sub">Clean promotions</p>
-          </div>
-
-          {/* Avg Risk */}
-          <div className="kpi-card glass-panel kpi-card--neutral">
-            <span className="kpi-title">AVG RISK SCORE</span>
-            <div className="kpi-value font-mono">
-              {avgRisk}
-              <span style={{ fontSize: '14px', color: 'var(--text-muted)', fontWeight: 400 }}>/100</span>
+        <div className="glass-panel" style={{ overflow: 'hidden' }}>
+          {deploymentsQuery.isLoading ? (
+            <div className="dash-empty-state">
+              <RefreshCw size={20} className="spinning" />
+              <span>Loading deployment decisions...</span>
             </div>
-            <div className="kpi-progress-bar">
-              <div className="kpi-progress-fill" style={{
-                width: `${avgRisk}%`,
-                background: avgRisk >= 60 ? 'var(--color-block)' : avgRisk >= 30 ? 'var(--color-review)' : 'var(--color-safe)'
-              }} />
+          ) : deploymentsList.length === 0 ? (
+            <div className="dash-empty-state dash-empty-state--cta">
+              <Rocket size={28} className="empty-icon" />
+              <h3 className="empty-headline">No deployment decisions logged</h3>
+              <p className="empty-desc">
+                Trigger a scan from the webhook simulator to evaluate security outcomes.
+              </p>
+              <div className="empty-cta-row">
+                <button onClick={() => navigate('/simulator')} className="btn-primary-stitch font-mono">
+                  <Terminal size={13} /> Run Simulation
+                </button>
+              </div>
             </div>
-          </div>
-
-          {/* Avg Confidence */}
-          <div className="kpi-card glass-panel kpi-card--safe">
-            <span className="kpi-title">AVG CONFIDENCE</span>
-            <div className="kpi-value font-mono" style={{ color: 'var(--color-safe)' }}>
-              {Math.round(avgConfidence * 100)}%
-            </div>
-            <div className="kpi-progress-bar">
-              <div className="kpi-progress-fill" style={{ width: `${avgConfidence * 100}%`, background: 'var(--color-safe)' }} />
-            </div>
-          </div>
+          ) : (
+            <table className="deploy-table font-mono">
+              <thead>
+                <tr>
+                  <th>Repository</th>
+                  <th>Decision</th>
+                  <th>Risk Score</th>
+                  <th>Branch</th>
+                  <th>Time Evaluated</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {deploymentsList.map(dep => (
+                  <tr
+                    key={dep.correlation_id}
+                    onClick={() => navigate(`/deployments/${dep.correlation_id}`)}
+                    className="deploy-row"
+                  >
+                    <td className="repo-cell">
+                      <span className="repo-name">{dep.repository}</span>
+                      <span className="repo-id">{dep.correlation_id.substring(0, 8)}…</span>
+                    </td>
+                    <td>
+                      <StatusBadge status={dep.decision || 'PENDING'} />
+                    </td>
+                    <td>
+                      <span className={`score-badge ${(dep.overall_score ?? 0) >= 60 ? 'high' : (dep.overall_score ?? 0) >= 30 ? 'medium' : 'low'}`}>
+                        {dep.overall_score ?? '—'}
+                      </span>
+                    </td>
+                    <td className="branch-cell">{dep.branch || '—'}</td>
+                    <td className="time-cell">{formatRelativeTime(dep.generated_at)}</td>
+                    <td>
+                      <ExternalLink size={12} className="row-link-icon" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
-      {/* ====== MAIN CONTENT GRID (Deployments + Pipeline + Actions) ====== */}
+      {/* ====== SECTION 4: SYSTEM HEALTH & AGENT STATUS ====== */}
       <div className="dashboard-main-grid">
-
-        {/* LEFT COLUMN: Recent Deployments */}
+        
+        {/* Left Column: Pipeline Health */}
         <div className="dash-col-left">
-          <div className="section-block" style={{ height: '100%' }}>
-            <div className="section-header">
-              <span className="section-label">Recent Deployment Activity</span>
-              <button
-                onClick={() => navigate('/deployments')}
-                className="section-action-btn"
-              >
-                View All <ChevronRight size={12} />
-              </button>
-            </div>
-
-            <div className="glass-panel" style={{ overflow: 'hidden' }}>
-              {deploymentsQuery.isLoading ? (
-                <div className="dash-empty-state">
-                  <RefreshCw size={20} className="spinning" />
-                  <span>Loading deployment activity...</span>
-                </div>
-              ) : deploymentsList.length === 0 ? (
-                <div className="dash-empty-state dash-empty-state--cta">
-                  <Rocket size={28} className="empty-icon" />
-                  <h3 className="empty-headline">No deployment analyses yet</h3>
-                  <p className="empty-desc">
-                    Connect a GitHub repository or run a simulated scan to begin seeing results here.
-                  </p>
-                  <div className="empty-cta-row">
-                    <button onClick={() => navigate('/simulator')} className="btn-primary-stitch font-mono">
-                      <Terminal size={13} /> Run Simulation
-                    </button>
-                    <button onClick={() => navigate('/settings')} className="btn-secondary-stitch font-mono">
-                      <Activity size={13} /> Configure
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <table className="deploy-table font-mono">
-                  <thead>
-                    <tr>
-                      <th>Repository</th>
-                      <th>Decision</th>
-                      <th>Risk</th>
-                      <th>Branch</th>
-                      <th>Time</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {deploymentsList.map(dep => (
-                      <tr
-                        key={dep.correlation_id}
-                        onClick={() => navigate(`/deployments/${dep.correlation_id}`)}
-                        className="deploy-row"
-                      >
-                        <td className="repo-cell">
-                          <span className="repo-name">{dep.repository}</span>
-                          <span className="repo-id">{dep.correlation_id.substring(0, 8)}…</span>
-                        </td>
-                        <td>
-                          <span className={`verdict-tag-small ${dep.decision?.toLowerCase() || 'pending'}`}>
-                            {dep.decision || 'PENDING'}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={`score-badge ${(dep.overall_score ?? 0) >= 60 ? 'high' : (dep.overall_score ?? 0) >= 30 ? 'medium' : 'low'}`}>
-                            {dep.overall_score ?? '—'}
-                          </span>
-                        </td>
-                        <td className="branch-cell">{dep.branch || '—'}</td>
-                        <td className="time-cell">{formatRelativeTime(dep.generated_at)}</td>
-                        <td>
-                          <ExternalLink size={12} className="row-link-icon" />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT COLUMN: Pipeline Health + Quick Actions */}
-        <div className="dash-col-right">
-
-          {/* SECTION 4: Pipeline Health */}
           <div className="section-block">
             <div className="section-header">
-              <span className="section-label">Pipeline Health</span>
+              <span className="section-label">Pipeline System Health</span>
             </div>
             <div className="glass-panel" style={{ padding: '16px' }}>
               <div className="pipeline-health-grid">
@@ -398,16 +413,13 @@ export const Dashboard: React.FC = () => {
                         <Icon size={13} className="pipeline-icon" />
                         <span className="pipeline-label">{svc.label}</span>
                       </div>
-                      <div className={`pipeline-status-badge status-${status}`}>
-                        <span className={`status-pip ${status !== 'unknown' ? status : 'offline'}`} />
-                        <span>{status === 'unknown' ? 'CHECKING' : status.toUpperCase()}</span>
-                      </div>
+                      <HealthIndicator status={status} />
                     </div>
                   );
                 })}
               </div>
 
-              {/* Active agents chips */}
+              {/* Active Agent Chips */}
               {agentStatusQuery.data?.agents && agentStatusQuery.data.agents.length > 0 && (
                 <div className="agents-row">
                   {agentStatusQuery.data.agents.map(a => (
@@ -420,33 +432,78 @@ export const Dashboard: React.FC = () => {
               )}
             </div>
           </div>
+        </div>
 
-          {/* SECTION 5: Quick Actions */}
+        {/* Right Column: Deployment Statistics / Analytics */}
+        <div className="dash-col-right">
           <div className="section-block">
             <div className="section-header">
-              <span className="section-label">Quick Actions</span>
+              <span className="section-label">Deployment Statistics</span>
+              <span className="section-period">{timePeriod}</span>
             </div>
-            <div className="quick-actions-grid">
-              {QUICK_ACTIONS.map(action => {
-                const Icon = action.icon;
-                return (
-                  <button
-                    key={action.path}
-                    onClick={() => navigate(action.path)}
-                    className={`quick-action-btn ${action.primary ? 'quick-action-btn--primary' : 'quick-action-btn--secondary'}`}
-                  >
-                    <Icon size={14} />
-                    <span>{action.label}</span>
-                  </button>
-                );
-              })}
+            <div className="kpi-grid-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+              
+              <MetricCard
+                title="TOTAL SCAN VOLUME"
+                value={total}
+                subtitle="Scans evaluated"
+              />
+
+              <MetricCard
+                title="BLOCKED OUTCOMES"
+                value={blocked}
+                subtitle="High-risk scans rejected"
+                type={blocked > 0 ? 'danger' : 'neutral'}
+                valueStyle={blocked > 0 ? { color: 'var(--color-block)' } : undefined}
+              />
+
+              <MetricCard
+                title="UNDER REVIEW"
+                value={review}
+                subtitle="Manual verification cases"
+                type={review > 0 ? 'warn' : 'neutral'}
+                valueStyle={review > 0 ? { color: 'var(--color-review)' } : undefined}
+              />
+
+              <MetricCard
+                title="CLEAN PROMOTIONS"
+                value={safe}
+                subtitle="Scans promoted safe"
+                type="safe"
+                valueStyle={{ color: 'var(--color-safe)' }}
+              />
+
+              <MetricCard
+                title="AVG PIPELINE RISK"
+                value={
+                  <>
+                    {avgRisk}
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 400 }}>/100</span>
+                  </>
+                }
+                subtitle="Overall pipeline score mean"
+                progress={avgRisk}
+                progressColor={avgRisk >= 60 ? 'var(--color-block)' : avgRisk >= 30 ? 'var(--color-review)' : 'var(--color-safe)'}
+              />
+
+              <MetricCard
+                title="AVG CONFIDENCE INDEX"
+                value={`${Math.round(avgConfidence * 100)}%`}
+                subtitle="Model validation average"
+                type="safe"
+                progress={avgConfidence * 100}
+                progressColor="var(--color-safe)"
+                valueStyle={{ color: 'var(--color-safe)' }}
+              />
+
             </div>
           </div>
-
         </div>
+
       </div>
 
     </div>
   );
 };
+
 export default Dashboard;

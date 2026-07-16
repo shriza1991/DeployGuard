@@ -56,7 +56,7 @@ class QdrantService:
         logger.info(f"Creating collection '{self.collection}' in Qdrant (dimension: {vector_size})...")
         return self.create_collection(vector_size)
 
-    def upsert_chunks(self, chunks: List[CodeChunk], embeddings: List[List[float]]) -> bool:
+    def upsert_chunks(self, chunks: List[CodeChunk], embeddings: List[List[float]], batch_size: int = 100) -> bool:
         """
         Upserts a batch of code chunks and their embeddings into Qdrant.
         Uses a stable UUID per chunk to avoid duplicates.
@@ -84,8 +84,7 @@ class QdrantService:
                 "payload": payload
             })
 
-        # Upsert in batches of 100 to avoid huge HTTP requests
-        batch_size = 100
+        # Upsert in batches
         for i in range(0, len(points), batch_size):
             batch = points[i:i+batch_size]
             payload = {"points": batch}
@@ -115,6 +114,35 @@ class QdrantService:
                     {
                         "key": "branch",
                         "match": {"value": branch}
+                    }
+                ]
+            }
+        }
+        response = self._request(
+            "post",
+            f"/collections/{self.collection}/points/delete",
+            json=payload
+        )
+        return response is not None and response.status_code in {200, 202}
+
+    def delete_by_file(self, repository: str, branch: str, relative_path: str) -> bool:
+        """
+        Deletes all vector points associated with a specific file in a repository and branch.
+        """
+        payload = {
+            "filter": {
+                "must": [
+                    {
+                        "key": "repository",
+                        "match": {"value": repository}
+                    },
+                    {
+                        "key": "branch",
+                        "match": {"value": branch}
+                    },
+                    {
+                        "key": "relative_path",
+                        "match": {"value": relative_path}
                     }
                 ]
             }

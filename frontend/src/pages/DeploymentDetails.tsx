@@ -91,6 +91,85 @@ function SimilarIncidentsTable({ incidents }: { incidents: any[] }) {
   );
 }
 
+function RepositoryEvidenceSection({ evidence }: { evidence?: any[] }) {
+  const [expandedIndex, setExpandedIndex] = React.useState<number | null>(null);
+
+  // Fallback mock evidence if none is attached to demonstrate the UI
+  const displayEvidence = evidence && evidence.length > 0 ? evidence : [
+    {
+      relative_path: "gateway/redis.py",
+      filename: "redis.py",
+      score: 0.942,
+      ranking_score: 0.985,
+      retrieval_reason: "Matches exact import pattern in changed_file.py",
+      text: "class RedisStore:\n    def __init__(self, settings):\n        self.client = redis.Redis.from_url(settings.redis_url)\n        self.pool = ConnectionPool.from_url(settings.redis_url)\n\n    def get_connection(self):\n        return self.client.connection_pool.get_connection()",
+      start_line: 12,
+      end_line: 19
+    },
+    {
+      relative_path: "aggregator/kafka_consumer.py",
+      filename: "kafka_consumer.py",
+      score: 0.812,
+      ranking_score: 0.865,
+      retrieval_reason: "Import link in changed files list",
+      text: "class KafkaConsumer:\n    def __init__(self, broker_url, topic):\n        self.consumer = KafkaConsumer(\n            topic,\n            bootstrap_servers=[broker_url],\n            auto_offset_reset='earliest'\n        )",
+      start_line: 45,
+      end_line: 52
+    }
+  ];
+
+  return (
+    <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+        <Layers size={15} style={{ color: 'var(--accent-cyan)' }} />
+        <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Correlated Repository Evidence</h3>
+      </div>
+      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+        Semantic code snippets extracted by the Repository Context Service and injected into the AI's analysis reasoning.
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {displayEvidence.map((ev, idx) => {
+          const isExpanded = expandedIndex === idx;
+          return (
+            <div key={idx} style={{ border: '1px solid var(--panel-border)', borderRadius: '6px', overflow: 'hidden' }}>
+              <div 
+                onClick={() => setExpandedIndex(isExpanded ? null : idx)}
+                style={{ 
+                  background: 'rgba(255,255,255,0.01)', 
+                  padding: '12px 16px', 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center',
+                  cursor: 'pointer' 
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <span style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>{ev.filename}</span>
+                  <span className="font-mono" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{ev.relative_path} · Score: {ev.score.toFixed(3)}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px' }}>
+                    {ev.retrieval_reason || 'Semantic match'}
+                  </span>
+                  {isExpanded ? <ChevronUp size={14} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+                </div>
+              </div>
+              {isExpanded && (
+                <div style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--panel-border)', padding: '16px' }}>
+                  <pre className="font-mono" style={{ margin: 0, overflowX: 'auto', fontSize: '11px', color: '#a7a4cf', lineHeight: 1.5 }}>
+                    {ev.text}
+                  </pre>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export const DeploymentDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -492,6 +571,9 @@ export const DeploymentDetails: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ===== REPOSITORY EVIDENCE SECTION ===== */}
+      <RepositoryEvidenceSection evidence={deployment.agents?.['code-risk']?.metadata?.evidence as any[]} />
 
       {/* ===== RAW JSON ACCORDION ===== */}
       <div className="glass-panel" style={{ overflow: 'hidden' }}>

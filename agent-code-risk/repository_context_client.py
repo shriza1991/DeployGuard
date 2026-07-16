@@ -22,7 +22,16 @@ class RepositoryEvidenceProvider:
             "retrieved_chunks": 0,
             "total_characters": 0,
             "context_truncated": False,
-            "repository_context_available": False
+            "repository_context_available": False,
+            "branch_filter_used": False,
+            "fallback_used": False,
+            "top_similarity": 0.0,
+            "average_similarity": 0.0,
+            "unique_files": 0,
+            "retrieved_paths": [],
+            "ranking_strategy": "unknown",
+            "embedding_latency_ms": 0.0,
+            "search_latency_ms": 0.0
         }
 
         # 1. Parse repository name
@@ -140,6 +149,13 @@ class RepositoryEvidenceProvider:
             result_json = response.json()
             logger.info("Parsed JSON keys: %s", list(result_json.keys()))
             evidence_list = result_json.get("results")
+            
+            res_metrics = result_json.get("metrics") or {}
+            # Keep client-side roundtrip latency
+            client_latency = metrics["retrieval_latency_ms"]
+            metrics.update(res_metrics)
+            metrics["retrieval_latency_ms"] = client_latency
+
             logger.info("Length of results: %s", len(evidence_list) if isinstance(evidence_list, list) else 0)
             if isinstance(evidence_list, list) and len(evidence_list) > 0:
                 logger.info("First result: %s", evidence_list[0])

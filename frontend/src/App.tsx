@@ -12,6 +12,7 @@ import { WebhookSimulator } from './pages/WebhookSimulator';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { About } from './pages/About';
+import { SearchRepository } from './pages/SearchRepository';
 
 export const App: React.FC = () => {
   return (
@@ -29,6 +30,7 @@ export const App: React.FC = () => {
           <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
           <Route path="about" element={<About />} />
+          <Route path="search" element={<SearchRepository />} />
         </Route>
       </Routes>
     </BrowserRouter>

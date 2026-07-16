@@ -27,3 +27,12 @@ export const incidentHistoryClient: AxiosInstance = axios.create({
   headers: { 'Content-Type': 'application/json' },
   timeout: 15_000,
 });
+
+const repoContextBaseUrl =
+  import.meta.env.VITE_REPO_CONTEXT_API_URL ?? '/api/repository';
+
+export const repoContextClient: AxiosInstance = axios.create({
+  baseURL: repoContextBaseUrl,
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 15_000,
+});

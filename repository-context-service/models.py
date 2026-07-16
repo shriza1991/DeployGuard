@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 class IndexRequest(BaseModel):
     repository_url: str
@@ -53,3 +53,13 @@ class RepoManifest(BaseModel):
     commit: str = ""
     branch: str = ""
     last_indexed: str = ""
+    repository_size_bytes: int = 0
+    lines_of_code: int = 0
+    number_of_services: int = 0
+    test_count: int = 0
+    configuration_count: int = 0
+    docker_images: List[str] = Field(default_factory=list)
+    terraform_modules: List[str] = Field(default_factory=list)
+    helm_charts: List[str] = Field(default_factory=list)
+    architecture_summary: Dict[str, Any] = Field(default_factory=dict)
+    dependency_graph: Dict[str, List[str]] = Field(default_factory=dict)
