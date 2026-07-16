@@ -63,3 +63,23 @@ class RepoManifest(BaseModel):
     helm_charts: List[str] = Field(default_factory=list)
     architecture_summary: Dict[str, Any] = Field(default_factory=dict)
     dependency_graph: Dict[str, List[str]] = Field(default_factory=dict)
+
+class RepoStats(BaseModel):
+    repository: str
+    branch: str
+
+    number_of_files: int
+    number_of_chunks: int
+    lines_of_code: int
+
+    detected_languages: List[str] = Field(default_factory=list)
+
+    test_count: int
+    configuration_count: int
+    number_of_services: int
+
+    repository_size_bytes: int
+
+    docker_images: List[str] = Field(default_factory=list)
+    terraform_modules: List[str] = Field(default_factory=list)
+    helm_charts: List[str] = Field(default_factory=list)

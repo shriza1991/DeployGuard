@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Query
-from models import IndexRequest, RepoStatus, RepoManifest
+from models import IndexRequest, RepoStatus, RepoManifest, RepoStats
 
 logger = logging.getLogger("repository-context-service")
 router = APIRouter()
@@ -62,3 +62,35 @@ async def delete_repository_index(request: Request, repository: str, branch: str
     except Exception as e:
         logger.error(f"Error purging repository data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/repository/stats/{repository}", response_model=RepoStats)
+async def get_repository_stats(
+    request: Request,
+    repository: str,
+    branch: str = Query("main")
+):
+    redis_service = request.app.state.redis_service
+
+    manifest = redis_service.get_manifest(repository, branch)
+
+    if not manifest:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Repository stats not found for '{repository}' on branch '{branch}'."
+        )
+
+    return RepoStats(
+        repository=repository,
+        branch=branch,
+        number_of_files=manifest.number_of_files,
+        number_of_chunks=manifest.number_of_chunks,
+        lines_of_code=manifest.lines_of_code,
+        detected_languages=manifest.detected_languages,
+        test_count=manifest.test_count,
+        configuration_count=manifest.configuration_count,
+        number_of_services=manifest.number_of_services,
+        repository_size_bytes=manifest.repository_size_bytes,
+        docker_images=manifest.docker_images,
+        terraform_modules=manifest.terraform_modules,
+        helm_charts=manifest.helm_charts,
+    )

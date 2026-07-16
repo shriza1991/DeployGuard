@@ -49,12 +49,29 @@ export interface SearchResponse {
   branch: string;
 }
 
+export interface RepoStatsResponse {
+  repository: string;
+  branch: string;
+  number_of_files: number;
+  number_of_chunks: number;
+  lines_of_code: number;
+  detected_languages: string[];
+  test_count: number;
+  configuration_count: number;
+  number_of_services: number;
+  repository_size_bytes: number;
+  docker_images: string[];
+  terraform_modules: string[];
+  helm_charts: string[];
+}
+
 export async function getRepositoryStatus(
   repository: string,
   branch: string = 'main'
 ): Promise<RepoStatusResponse> {
+  const normRepo = repository.split('/').pop() ?? repository;
   const { data } = await repoContextClient.get<RepoStatusResponse>(
-    `/repository/status/${encodeURIComponent(repository)}`,
+    `/repository/status/${encodeURIComponent(normRepo)}`,
     { params: { branch } }
   );
   return data;
@@ -64,8 +81,21 @@ export async function getRepositoryManifest(
   repository: string,
   branch: string = 'main'
 ): Promise<RepoManifestResponse> {
+  const normRepo = repository.split('/').pop() ?? repository;
   const { data } = await repoContextClient.get<RepoManifestResponse>(
-    `/repository/manifest/${encodeURIComponent(repository)}`,
+    `/repository/manifest/${encodeURIComponent(normRepo)}`,
+    { params: { branch } }
+  );
+  return data;
+}
+
+export async function getRepositoryStats(
+  repository: string,
+  branch: string = 'main'
+): Promise<RepoStatsResponse> {
+  const normRepo = repository.split('/').pop() ?? repository;
+  const { data } = await repoContextClient.get<RepoStatsResponse>(
+    `/repository/stats/${encodeURIComponent(normRepo)}`,
     { params: { branch } }
   );
   return data;
@@ -77,9 +107,10 @@ export async function searchRepository(
   branch: string = 'main',
   top_k: number = 5
 ): Promise<SearchResponse> {
+  const normRepo = repository.split('/').pop() ?? repository;
   const { data } = await repoContextClient.post<SearchResponse>(
     '/repository/search',
-    { repository, query, branch, top_k }
+    { repository: normRepo, query, branch, top_k }
   );
   return data;
 }

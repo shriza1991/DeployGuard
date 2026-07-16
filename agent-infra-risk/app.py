@@ -1,7 +1,10 @@
+import datetime
 import json
 import logging
 import os
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 
 from kafka import KafkaConsumer, KafkaProducer
 
@@ -31,6 +34,64 @@ consumer = KafkaConsumer(
 
 reasoner = LLMReasoner()
 
+# Stats tracking
+STATS = {
+    "start_time": time.time(),
+    "analysis_count": 0,
+    "last_run_timestamp": None,
+    "total_latency_ms": 0.0,
+    "total_confidence": 0.0,
+    "version": "1.0.0",
+}
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            
+            uptime = time.time() - STATS["start_time"]
+            avg_latency = (STATS["total_latency_ms"] / STATS["analysis_count"]) if STATS["analysis_count"] > 0 else 0.0
+            avg_confidence = (STATS["total_confidence"] / STATS["analysis_count"]) if STATS["analysis_count"] > 0 else 0.0
+            
+            mem_mb = None
+            try:
+                import resource
+                mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+            except Exception:
+                pass
+            
+            response = {
+                "status": "ok",
+                "agent": "infra-risk",
+                "version": STATS["version"],
+                "uptime": uptime,
+                "analysis_count": STATS["analysis_count"],
+                "last_run_timestamp": STATS["last_run_timestamp"],
+                "average_latency_ms": avg_latency,
+                "average_confidence": avg_confidence,
+                "cpu_usage": None,
+                "memory_usage": mem_mb
+            }
+            self.wfile.write(json.dumps(response).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+def start_health_server(port: int = 8082):
+    def run():
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        server.serve_forever()
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+
+start_health_server(8082)
+logger.info("Health server started on port 8082")
+
 logger.info("agent-infra-risk started, waiting for events...")
 for msg in consumer:
     event = msg.value
@@ -38,16 +99,19 @@ for msg in consumer:
     correlation_id = event.get("correlation_id") if isinstance(event, dict) else None
     logger.info("[infra-risk] received event %s", correlation_id)
 
+    start_run = time.perf_counter()
+    confidence_val = 0.0
     try:
         analysis = analyze_infra_risk(payload)
         llm_result = reasoner.reason_about_change(payload, analysis)
+        confidence_val = max(0.0, min(1.0, analysis.get("confidence", 0.0) / 100.0))
 
         output = {
             "agent": "infra-risk",
             "correlation_id": correlation_id,
             "score": analysis["score"],
             "severity": analysis["severity"],
-            "confidence": max(0.0, min(1.0, analysis["confidence"] / 100.0)),
+            "confidence": confidence_val,
             "reasons": analysis["reasons"],
             "recommendations": analysis["recommendations"],
             "metadata": analysis["metadata"],
@@ -85,5 +149,12 @@ for msg in consumer:
         }
         producer.send(OUTPUT_TOPIC, output)
         producer.flush()
+    finally:
+        latency_ms = (time.perf_counter() - start_run) * 1000.0
+        STATS["analysis_count"] += 1
+        STATS["last_run_timestamp"] = datetime.datetime.utcnow().isoformat() + "Z"
+        STATS["total_latency_ms"] += latency_ms
+        STATS["total_confidence"] += confidence_val
 
     time.sleep(1)
+

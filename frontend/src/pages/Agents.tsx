@@ -145,16 +145,16 @@ export const Agents: React.FC = () => {
                       borderTop: '1px solid var(--panel-border)', 
                       paddingTop: '16px' 
                     }}>
-                      <AgentStat label="Last Run" value={liveLastRun} />
-                      <AgentStat label="Average Latency" value={`${agent.latency_ms} ms`} />
-                      <AgentStat label="Analysis Count" value={totalScans > 0 ? totalScans.toLocaleString() : '--'} />
-                      <AgentStat label="Average Confidence" value={liveAvgConfidence} />
+                      <AgentStat label="Last Run" value={agent.last_run_timestamp ? formatRelativeTime(agent.last_run_timestamp) : '--'} />
+                      <AgentStat label="Average Latency" value={agent.latency_ms !== undefined && agent.latency_ms !== null && agent.latency_ms > 0 ? `${Math.round(agent.latency_ms)} ms` : '--'} />
+                      <AgentStat label="Analysis Count" value={agent.analysis_count !== undefined && agent.analysis_count !== null ? agent.analysis_count.toLocaleString() : '--'} />
+                      <AgentStat label="Average Confidence" value={agent.average_confidence !== undefined && agent.average_confidence !== null && agent.average_confidence > 0 ? `${Math.round(agent.average_confidence * 100)}%` : '--'} />
                       
-                      {/* Hardware / Environment (unexposed in API - gracefully show '--') */}
-                      <AgentStat label="Version" value="--" />
-                      <AgentStat label="Uptime" value="--" />
-                      <AgentStat label="CPU Usage" value="--" />
-                      <AgentStat label="Memory Usage" value="--" />
+                      {/* Hardware / Environment */}
+                      <AgentStat label="Version" value={agent.version || '--'} />
+                      <AgentStat label="Uptime" value={agent.uptime !== undefined && agent.uptime !== null ? `${Math.round(agent.uptime)}s` : '--'} />
+                      <AgentStat label="CPU Usage" value={agent.cpu_usage !== undefined && agent.cpu_usage !== null ? `${agent.cpu_usage.toFixed(1)}%` : '--'} />
+                      <AgentStat label="Memory Usage" value={agent.memory_usage !== undefined && agent.memory_usage !== null ? `${agent.memory_usage.toFixed(1)} MB` : '--'} />
                     </div>
                   </div>
 

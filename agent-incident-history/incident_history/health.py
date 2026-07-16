@@ -15,17 +15,38 @@ def create_health_app(service: IncidentHistoryService) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, object]:
+        import time
         qdrant_available = False
         try:
             qdrant_available = service.vector_store.health_check()
         except Exception:
             qdrant_available = False
+            
+        uptime = time.time() - service.start_time
+        avg_latency = (service.total_latency_ms / service.analysis_count) if service.analysis_count > 0 else 0.0
+        avg_confidence = (service.total_confidence / service.analysis_count) if service.analysis_count > 0 else 0.0
+
+        mem_mb = None
+        try:
+            import resource
+            mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+        except Exception:
+            pass
+
         return {
             "status": "ok",
             "agent": "incident-history",
             "qdrant_available": qdrant_available,
             "embedding_provider": getattr(service.embedding_provider, "name", "unknown"),
             "llm_provider": getattr(service.llm_reasoner.provider, "name", "unknown"),
+            "version": service.version,
+            "uptime": uptime,
+            "analysis_count": service.analysis_count,
+            "last_run_timestamp": service.last_run_timestamp,
+            "average_latency_ms": avg_latency,
+            "average_confidence": avg_confidence,
+            "cpu_usage": None,
+            "memory_usage": mem_mb
         }
 
     return app

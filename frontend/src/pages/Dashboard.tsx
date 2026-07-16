@@ -8,7 +8,7 @@ import {
   listDeployments,
   type DeploymentSummary,
 } from '../api/dashboard';
-import { getRepositoryStatus, getRepositoryManifest } from '../api/repository';
+import { getRepositoryStatus, getRepositoryManifest, getRepositoryStats } from '../api/repository';
 import {
   Shield,
   Activity,
@@ -115,6 +115,12 @@ export const Dashboard: React.FC = () => {
   const repoManifestQuery = useQuery({
     queryKey: ['repoManifest', repoName, branchName],
     queryFn: () => getRepositoryManifest(repoName, branchName),
+    refetchInterval: 10000,
+  });
+
+  const repoStatsQuery = useQuery({
+    queryKey: ['repoStats', repoName, branchName],
+    queryFn: () => getRepositoryStats(repoName, branchName),
     refetchInterval: 10000,
   });
 
@@ -251,49 +257,63 @@ export const Dashboard: React.FC = () => {
           <div className="section-header">
             <span className="section-label">Repository Context</span>
           </div>
-          <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Repository</span>
-              <span className="font-mono" style={{ fontSize: '13px', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                {repoName}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Status</span>
-              <StatusBadge status={repoStatusQuery.data?.status || 'NOT_INDEXED'} />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Files Indexed</span>
-              <span className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>
-                {repoManifestQuery.data?.file_count !== undefined ? repoManifestQuery.data.file_count : '--'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Lines of Code</span>
-              <span className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>
-                {repoManifestQuery.data?.lines_of_code !== undefined ? repoManifestQuery.data.lines_of_code.toLocaleString() : '--'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Frameworks</span>
-              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                {repoManifestQuery.data?.frameworks && repoManifestQuery.data.frameworks.length > 0 ? (
-                  repoManifestQuery.data.frameworks.map(fw => (
-                    <span key={fw} className="agent-chip font-mono" style={{ margin: 0, padding: '1px 6px', fontSize: '9px' }}>
-                      {fw}
-                    </span>
-                  ))
-                ) : (
-                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>--</span>
-                )}
+          <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', minHeight: '180px', justifyContent: 'center' }}>
+            { (repoStatusQuery.isLoading || repoManifestQuery.isLoading || repoStatsQuery.isLoading) ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
+                <span style={{ animation: 'spin 1s linear infinite', fontSize: '16px' }}>⏳</span>
+                <span style={{ fontSize: '11px' }}>Loading repository context...</span>
               </div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Last Indexed</span>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                {repoManifestQuery.data?.last_indexed_at ? formatRelativeTime(repoManifestQuery.data.last_indexed_at) : '--'}
-              </span>
-            </div>
+            ) : (repoStatusQuery.isError || repoManifestQuery.isError || repoStatsQuery.isError) ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', color: 'var(--accent-red)' }}>
+                <span style={{ fontSize: '16px' }}>⚠️</span>
+                <span style={{ fontSize: '11px', textAlign: 'center' }}>Failed to load repository context</span>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Repository</span>
+                  <span className="font-mono" style={{ fontSize: '13px', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                    {repoName}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Status</span>
+                  <StatusBadge status={repoStatusQuery.data?.status === 'completed' ? 'ONLINE' : (repoStatusQuery.data?.status === 'indexing' ? 'INDEXING' : (repoStatusQuery.data?.status === 'failed' ? 'FAILED' : 'NOT_INDEXED'))} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Files Indexed</span>
+                  <span className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>
+                    {repoStatsQuery.data?.number_of_files !== undefined ? repoStatsQuery.data.number_of_files : '--'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Lines of Code</span>
+                  <span className="font-mono" style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>
+                    {repoStatsQuery.data?.lines_of_code !== undefined ? repoStatsQuery.data.lines_of_code.toLocaleString() : '--'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Frameworks</span>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {repoManifestQuery.data?.frameworks && repoManifestQuery.data.frameworks.length > 0 ? (
+                      repoManifestQuery.data.frameworks.map(fw => (
+                        <span key={fw} className="agent-chip font-mono" style={{ margin: 0, padding: '1px 6px', fontSize: '9px' }}>
+                          {fw}
+                        </span>
+                      ))
+                    ) : (
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>--</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Last Indexed</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {repoManifestQuery.data?.last_indexed ? formatRelativeTime(repoManifestQuery.data.last_indexed) : '--'}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

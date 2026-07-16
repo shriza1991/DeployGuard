@@ -21,9 +21,38 @@ class IncidentHistoryService:
         self.vector_store = vector_store
         self.retriever = retriever
         self.llm_reasoner = llm_reasoner
+        self.start_time = time.time()
+        self.analysis_count = 0
+        self.last_run_timestamp = None
+        self.total_latency_ms = 0.0
+        self.total_confidence = 0.0
+        self.version = "1.0.0"
 
     def analyze_event(self, payload: dict[str, Any], correlation_id: str | None = None) -> dict[str, Any]:
         started = time.perf_counter()
+        confidence_val = 0.0
+        try:
+            result = self._analyze_event_internal(payload, correlation_id, started)
+            confidence_val = result.get("confidence", 0.0)
+            return result
+        except Exception as exc:
+            fallback = self._fallback_output(
+                correlation_id=correlation_id,
+                reason=f"Unexpected error: {exc}",
+                recommendation="Check the service logs.",
+                metadata={"error": str(exc)},
+            )
+            confidence_val = fallback.get("confidence", 0.0)
+            return fallback
+        finally:
+            import datetime
+            total_latency_ms = (time.perf_counter() - started) * 1000.0
+            self.analysis_count += 1
+            self.last_run_timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+            self.total_latency_ms += total_latency_ms
+            self.total_confidence += confidence_val
+
+    def _analyze_event_internal(self, payload: dict[str, Any], correlation_id: str | None, started: float) -> dict[str, Any]:
         deployment_document = build_deployment_document(payload)
         if not deployment_document:
             deployment_document = "empty deployment event"

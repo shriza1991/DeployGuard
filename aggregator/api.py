@@ -317,13 +317,59 @@ def get_deployment_timeline(correlation_id: str):
 
 @router.get("/agents/status")
 def get_agent_status():
-    return {
-        "agents": [
-            {"name": "Code Risk Agent", "status": "online", "latency_ms": 120, "region": "local"},
-            {"name": "Infra Risk Agent", "status": "online", "latency_ms": 98, "region": "local"},
-            {"name": "Incident History Agent", "status": "online", "latency_ms": 145, "region": "local"},
-        ]
+    import os
+    import urllib.request
+    import json
+    
+    agents = []
+    
+    agent_endpoints = {
+        "Code Risk Agent": os.getenv("AGENT_CODE_RISK_URL", "http://agent-code-risk:8081/health"),
+        "Infra Risk Agent": os.getenv("AGENT_INFRA_RISK_URL", "http://agent-infra-risk:8082/health"),
+        "Incident History Agent": os.getenv("AGENT_INCIDENT_HISTORY_URL", "http://agent-incident-history:8080/health"),
     }
+    
+    for agent_name, url in agent_endpoints.items():
+        data = None
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode("utf-8"))
+        except Exception as e:
+            import logging
+            logging.getLogger("uvicorn").error(f"Error querying {agent_name} at {url}: {e}")
+            
+        if data:
+            agents.append({
+                "name": agent_name,
+                "status": "online",
+                "latency_ms": data.get("average_latency_ms", 0.0),
+                "region": "local",
+                "version": data.get("version"),
+                "uptime": data.get("uptime"),
+                "analysis_count": data.get("analysis_count"),
+                "last_run_timestamp": data.get("last_run_timestamp"),
+                "average_confidence": data.get("average_confidence"),
+                "cpu_usage": data.get("cpu_usage"),
+                "memory_usage": data.get("memory_usage"),
+            })
+        else:
+            agents.append({
+                "name": agent_name,
+                "status": "offline",
+                "latency_ms": 0,
+                "region": "local",
+                "version": None,
+                "uptime": None,
+                "analysis_count": None,
+                "last_run_timestamp": None,
+                "average_confidence": None,
+                "cpu_usage": None,
+                "memory_usage": None,
+            })
+            
+    return {"agents": agents}
 
 
 # ---------------------------------------------------------------------------

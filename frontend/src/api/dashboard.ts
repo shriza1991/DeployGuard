@@ -37,6 +37,13 @@ export interface AgentStatusItem {
   status: 'online' | 'offline' | 'degraded';
   latency_ms: number;
   region?: string;
+  version?: string | null;
+  uptime?: number | null;
+  analysis_count?: number | null;
+  last_run_timestamp?: string | null;
+  average_confidence?: number | null;
+  cpu_usage?: number | null;
+  memory_usage?: number | null;
 }
 
 export interface AgentStatusResponse {

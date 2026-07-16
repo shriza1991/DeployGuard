@@ -571,6 +571,10 @@ class Indexer:
             branch=branch
         )
         self.redis_service.save_status(repository, branch, final_status)
+        docker_images = sorted(set(docker_images))
+        terraform_modules = sorted(set(terraform_modules))
+        helm_charts = sorted(set(helm_charts))
+        logger.info(f"Docker images after dedup: {docker_images}")
 
         manifest = RepoManifest(
             detected_languages=list(detected_languages),
