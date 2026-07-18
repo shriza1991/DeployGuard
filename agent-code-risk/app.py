@@ -96,6 +96,11 @@ logger.info("agent-code-risk started, waiting for events...")
 for msg in consumer:
     event = msg.value
     payload = event.get("payload", {}) if isinstance(event, dict) else {}
+    
+    logger.info("=" * 80)
+    logger.info("CODE RISK PAYLOAD")
+    logger.info(json.dumps(payload, indent=2))
+    logger.info("=" * 80)
     correlation_id = event.get("correlation_id") if isinstance(event, dict) else None
     logger.info("[code-risk] received event %s", correlation_id)
 

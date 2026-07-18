@@ -1,3 +1,4 @@
+from app import logger
 import json
 import logging
 import os
@@ -54,9 +55,11 @@ async def github_webhook(payload: GitHubWebhookPayload):
         "payload": payload.model_dump(),
     }
 
-    logging.info(f"Publishing event: {event}")
+    # logging.info(f"Publishing event: {event}")
 
     producer.send(TOPIC, event)
+    logger.info("Publishing deployment event:")
+    logger.info(json.dumps(event, indent=2))
     producer.flush()
 
     logging.info("Successfully published to Kafka")
