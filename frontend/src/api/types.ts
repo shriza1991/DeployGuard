@@ -48,9 +48,10 @@ export interface GitHubWebhookPayload {
 }
 
 export interface TriggerWebhookResponse {
-  status: 'sent';
-  correlation_id: string;
-  topic: string;
+  status: 'sent' | 'ignored';
+  correlation_id?: string;
+  topic?: string;
+  reason?: string;
 }
 
 // --- Aggregator health ---

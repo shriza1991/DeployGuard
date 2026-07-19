@@ -85,6 +85,7 @@ export function buildWebhookPayload(
   const repoName = request.repository.split('/').pop() ?? request.repository;
 
   return {
+    action: 'opened',
     repository: {
       name: repoName,
       full_name: request.repository,

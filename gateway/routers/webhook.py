@@ -5,7 +5,7 @@ import os
 import uuid
 
 import redis
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from kafka import KafkaProducer
 from pydantic import BaseModel
 
@@ -47,7 +47,43 @@ class GitHubWebhookPayload(BaseModel):
 
 
 @router.post("/github")
-async def github_webhook(payload: GitHubWebhookPayload):
+async def github_webhook(
+    payload: GitHubWebhookPayload,
+    x_github_event: str | None = Header(None, alias="X-GitHub-Event")
+):
+    # 1. Determine event type (header preferred, fallback to payload structure)
+    if x_github_event is not None:
+        event_type = x_github_event.strip().lower()
+    else:
+        if payload.pull_request is not None:
+            event_type = "pull_request"
+        else:
+            event_type = "push"
+
+    if event_type != "pull_request":
+        reason = f"Ignored GitHub webhook event type '{event_type}' (DeployGuard only processes 'pull_request' events)"
+        logging.info(f"Webhook ignored: {reason}")
+        return {
+            "status": "ignored",
+            "reason": reason,
+        }
+
+    # 2. Filter actions for pull_request events (only opened, reopened, synchronize)
+    raw_action = payload.action
+    action = raw_action.strip().lower() if raw_action else "opened"
+    allowed_actions = {"opened", "reopened", "synchronize"}
+
+    if action not in allowed_actions:
+        reason = f"Ignored pull_request event with action '{raw_action or action}' (only opened, reopened, and synchronize actions are processed)"
+        logging.info(f"Webhook ignored: {reason}")
+        return {
+            "status": "ignored",
+            "reason": reason,
+        }
+
+    # Normalize action on payload for metadata persistence
+    payload.action = action
+
     correlation_id = str(uuid.uuid4())
 
     event = {
