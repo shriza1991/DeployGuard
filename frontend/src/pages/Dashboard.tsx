@@ -127,7 +127,7 @@ export const Dashboard: React.FC = () => {
   React.useEffect(() => {
     if (deploymentsQuery.data) {
       lastRefresh.current = new Date();
-      
+
       const items = (deploymentsQuery.data?.items ?? []) as DeploymentSummary[];
       const isFirstLoad = Object.keys(prevDecisions.current).length === 0;
 
@@ -251,14 +251,14 @@ export const Dashboard: React.FC = () => {
 
       {/* ====== SECTION 2: REPOSITORY CONTEXT & QUICK ACTIONS ====== */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
-        
+
         {/* Repository Context Card */}
         <div className="section-block">
           <div className="section-header">
             <span className="section-label">Repository Context</span>
           </div>
           <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', minHeight: '180px', justifyContent: 'center' }}>
-            { (repoStatusQuery.isLoading || repoManifestQuery.isLoading || repoStatsQuery.isLoading) ? (
+            {(repoStatusQuery.isLoading || repoManifestQuery.isLoading || repoStatsQuery.isLoading) ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
                 <span style={{ animation: 'spin 1s linear infinite', fontSize: '16px' }}>⏳</span>
                 <span style={{ fontSize: '11px' }}>Loading repository context...</span>
@@ -278,7 +278,7 @@ export const Dashboard: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
                   <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Status</span>
-                  <StatusBadge status={repoStatusQuery.data?.status === 'completed' ? 'ONLINE' : (repoStatusQuery.data?.status === 'indexing' ? 'INDEXING' : (repoStatusQuery.data?.status === 'failed' ? 'FAILED' : 'NOT_INDEXED'))} />
+                  <StatusBadge status={repoStatusQuery.data?.status === 'indexed' ? 'ONLINE' : (repoStatusQuery.data?.status === 'indexing' ? 'INDEXING' : (repoStatusQuery.data?.status === 'failed' ? 'FAILED' : 'NOT_INDEXED'))} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
                   <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Files Indexed</span>
@@ -309,7 +309,7 @@ export const Dashboard: React.FC = () => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '8px' }}>
                   <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Last Indexed</span>
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    {repoManifestQuery.data?.last_indexed ? formatRelativeTime(repoManifestQuery.data.last_indexed) : '--'}
+                    {repoManifestQuery.data?.last_indexed_at ? formatRelativeTime(repoManifestQuery.data.last_indexed_at) : '--'}
                   </span>
                 </div>
               </>
@@ -415,7 +415,7 @@ export const Dashboard: React.FC = () => {
 
       {/* ====== SECTION 4: SYSTEM HEALTH & AGENT STATUS ====== */}
       <div className="dashboard-main-grid">
-        
+
         {/* Left Column: Pipeline Health */}
         <div className="dash-col-left">
           <div className="section-block">
@@ -462,7 +462,7 @@ export const Dashboard: React.FC = () => {
               <span className="section-period">{timePeriod}</span>
             </div>
             <div className="kpi-grid-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-              
+
               <MetricCard
                 title="TOTAL SCAN VOLUME"
                 value={total}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listDeployments, type DeploymentSummary } from '../api/dashboard';
 import { 
@@ -38,7 +38,7 @@ export const Deployments: React.FC = () => {
   // UI toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const fetchDeployments = async () => {
+  const fetchDeployments = useCallback(async () => {
     setLoading(true);
     try {
       // Fetch deployments from backend using filters
@@ -56,11 +56,11 @@ export const Deployments: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, decisionFilter, projectFilter, pageSize]);
 
   useEffect(() => {
     fetchDeployments();
-  }, [page, decisionFilter, projectFilter]);
+  }, [fetchDeployments]);
 
   const triggerToast = (msg: string) => {
     setToastMessage(msg);

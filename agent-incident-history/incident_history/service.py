@@ -209,31 +209,31 @@ def create_service(settings: Settings) -> IncidentHistoryService:
 
 
 def _score_incidents(incidents: list[SimilarIncident], qdrant_available: bool) -> int:
-    if not qdrant_available:
-        return 10
-    if not incidents:
+    if not qdrant_available or not incidents:
         return 10
 
-    high_similarity = [item for item in incidents if item.similarity >= 0.85]
+    # Require similarity >= 0.70 for incident matches to boost score
+    high_similarity = [item for item in incidents if item.similarity >= 0.70]
+    if not high_similarity:
+        return 10
+
     critical_rollbacks = [
-        item for item in incidents
+        item for item in high_similarity
         if item.severity == "critical" and (item.rollback or "rollback" in item.outcome)
     ]
     production_failures = [
-        item for item in incidents
+        item for item in high_similarity
         if item.environment == "production" and item.severity in {"high", "critical"}
     ]
 
-    if len(production_failures) >= 3:
-        return 100
+    if len(production_failures) >= 2:
+        return 80
     if critical_rollbacks:
-        return 90
-    if len(high_similarity) >= 2:
         return 70
+    if len(high_similarity) >= 2:
+        return 50
     if high_similarity:
-        return 55
-    if incidents:
-        return 30
+        return 35
     return 10
 
 

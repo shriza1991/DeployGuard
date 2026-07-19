@@ -121,8 +121,37 @@ class AnalyzerFinding:
     score_delta: int
     reason: str
     recommendation: str
-    confidence: int = 60
+    rule_id: str = "CODE_RISK_RULE"
+    category: str = "code_risk"
+    subcategory: str = "general"
+    policy_action: str = "REVIEW_REQUIRED"
+    severity: str = "MEDIUM"
+    confidence: float = 0.85
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        file_path = self.metadata.get("file", "unknown")
+        line_val = self.metadata.get("line")
+        matched_str = line_val if isinstance(line_val, str) else self.reason
+
+        return {
+            "category": self.category,
+            "subcategory": self.subcategory,
+            "rule_id": self.rule_id,
+            "severity": self.severity.upper(),
+            "policy_action": self.policy_action,
+            "confidence": self.confidence,
+            "evidence": {
+                "file": file_path,
+                "line": self.metadata.get("line_number"),
+                "matched": str(matched_str)[:200],
+            },
+            "description": self.reason,
+            "recommendation": self.recommendation,
+            "reason": self.reason,
+            "weight": self.score_delta,
+            "metadata": self.metadata,
+        }
 
 
 class BaseAnalyzer(ABC):
@@ -143,9 +172,14 @@ class SecuritySensitiveAnalyzer(BaseAnalyzer):
                 continue
             return AnalyzerFinding(
                 score_delta=12,
-                reason="Security-sensitive terms were introduced or modified in the patch.",
+                reason="Security-sensitive terms were introduced or modified in code diff.",
                 recommendation="Review the affected code paths for access control, encryption, and privilege handling.",
-                confidence=80,
+                rule_id="CODE_SECURITY_SENSITIVE",
+                category="authentication",
+                subcategory="access_control",
+                policy_action="REVIEW_REQUIRED",
+                severity="MEDIUM",
+                confidence=0.85,
                 metadata={"file": file_name, "line": line.strip()},
             )
         return None
@@ -155,40 +189,23 @@ class AuthenticationAnalyzer(BaseAnalyzer):
     name = "authentication"
 
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
-        # First, check patches for auth-related changes
         for file_name, line in _iter_changed_lines(context):
             normalized = line.lower()
             if not any(term in normalized for term in AUTH_TERMS):
                 continue
             if file_name.endswith((".py", ".js", ".ts", ".go", ".java", ".rb")):
                 return AnalyzerFinding(
-                    score_delta=14,
-                    reason="The diff touches authentication-related logic such as access control, sessions, or credentials.",
+                    score_delta=15,
+                    reason="Code diff touches authentication-related logic (sessions, credentials, roles).",
                     recommendation="Validate authentication flows, role changes, and session handling with focused tests.",
-                    confidence=85,
+                    rule_id="CODE_AUTH_MODIFIED",
+                    category="authentication",
+                    subcategory="auth_logic",
+                    policy_action="REVIEW_REQUIRED",
+                    severity="HIGH",
+                    confidence=0.90,
                     metadata={"file": file_name, "line": line.strip()},
                 )
-        
-        # Fallback: check searchable text (PR title, body, commit message) for removed authentication
-        searchable_text = _get_searchable_text(context)
-        if any(pattern in searchable_text for pattern in [
-            "removed auth",
-            "removed authentication", 
-            "removed login",
-            "remove auth",
-            "remove authentication",
-            "remove login",
-            "disabled auth",
-            "disable authentication",
-        ]):
-            return AnalyzerFinding(
-                score_delta=14,
-                reason="Authentication logic appears to have been removed or disabled in this change.",
-                recommendation="Verify that authentication removal is intentional and that alternative security measures are in place.",
-                confidence=80,
-                metadata={"detection_method": "metadata_text"},
-            )
-        
         return None
 
 
@@ -197,10 +214,8 @@ class DatabaseMigrationAnalyzer(BaseAnalyzer):
 
     _SQL_TOKENS = ("alter table", "create table", "drop column", "drop table", "create index")
     _FILE_TOKENS = ("migration", "migrations", ".sql")
-    _META_TOKENS = ("migrate", "migration", "schema migration") + _SQL_TOKENS
 
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
-        # 1. Preferred: inspect file names and patch content.
         changed_files = context.get("changed_files", [])
         for file_entry in changed_files:
             file_name = str(file_entry.get("filename", "")).lower()
@@ -208,29 +223,29 @@ class DatabaseMigrationAnalyzer(BaseAnalyzer):
             if any(token in file_name for token in self._FILE_TOKENS):
                 return AnalyzerFinding(
                     score_delta=15,
-                    reason="Database migration or schema changes were detected.",
+                    reason="Database migration or schema definition file modified.",
                     recommendation="Review the migration for backward compatibility and transactional safety.",
-                    confidence=90,
+                    rule_id="CODE_DB_MIGRATION",
+                    category="dependencies",
+                    subcategory="database_schema",
+                    policy_action="REVIEW_REQUIRED",
+                    severity="HIGH",
+                    confidence=0.95,
                     metadata={"file": file_name},
                 )
             if any(token in patch.lower() for token in self._SQL_TOKENS):
                 return AnalyzerFinding(
                     score_delta=15,
-                    reason="The patch includes schema-altering SQL statements.",
+                    reason="The patch includes schema-altering DDL SQL statements.",
                     recommendation="Validate the migration plan, rollback path, and data preservation strategy.",
-                    confidence=90,
+                    rule_id="CODE_DDL_SQL",
+                    category="dependencies",
+                    subcategory="database_schema",
+                    policy_action="REVIEW_REQUIRED",
+                    severity="HIGH",
+                    confidence=0.95,
                     metadata={"file": file_name},
                 )
-        # 2. Fallback: check PR title, body, and commit message.
-        searchable_text = _get_searchable_text(context)
-        if any(token in searchable_text for token in self._META_TOKENS):
-            return AnalyzerFinding(
-                score_delta=15,
-                reason="Database migration or schema change keywords found in PR metadata or commit message.",
-                recommendation="Validate the migration plan, rollback path, and data preservation strategy.",
-                confidence=80,
-                metadata={"detection_method": "metadata_text"},
-            )
         return None
 
 
@@ -238,10 +253,8 @@ class DangerousConfigurationAnalyzer(BaseAnalyzer):
     name = "dangerous-configuration"
 
     _INFRA_FILE_TOKENS = ("docker", ".env", "k8s", "helm", "terraform", "nginx", "compose", "deployment", "ingress", "service")
-    _META_INFRA_TOKENS = ("dockerfile", "terraform", "deployment.yaml", "deployment.yml", "docker-compose", "helm", "kubernetes", "k8s", "nginx.conf")
 
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
-        # 1. Preferred: inspect patch lines in infrastructure files.
         for file_name, line in _iter_changed_lines(context):
             normalized = line.lower()
             normalized_name = file_name.lower()
@@ -249,21 +262,16 @@ class DangerousConfigurationAnalyzer(BaseAnalyzer):
                 if any(token in normalized for token in CONFIG_TERMS):
                     return AnalyzerFinding(
                         score_delta=13,
-                        reason="Infrastructure or environment configuration changed in a potentially sensitive way.",
-                        recommendation="Review configuration changes for production blast radius, secrets, and compatibility.",
-                        confidence=80,
+                        reason="Infrastructure configuration changed in a security-sensitive way.",
+                        recommendation="Review configuration changes for production blast radius and secrets.",
+                        rule_id="CODE_INFRA_CONFIG_CHANGED",
+                        category="docker",
+                        subcategory="config",
+                        policy_action="REVIEW_REQUIRED",
+                        severity="MEDIUM",
+                        confidence=0.85,
                         metadata={"file": file_name, "line": line.strip()},
                     )
-        # 2. Fallback: check PR title, body, and commit message.
-        searchable_text = _get_searchable_text(context)
-        if any(token in searchable_text for token in self._META_INFRA_TOKENS):
-            return AnalyzerFinding(
-                score_delta=13,
-                reason="Infrastructure configuration file names mentioned in PR metadata or commit message.",
-                recommendation="Review configuration changes for production blast radius, secrets, and compatibility.",
-                confidence=70,
-                metadata={"detection_method": "metadata_text"},
-            )
         return None
 
 
@@ -273,12 +281,17 @@ class LargeChangeAnalyzer(BaseAnalyzer):
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
         file_count = int(context.get("changed_file_count") or 0)
         line_count = int(context.get("changed_line_count") or 0)
-        if file_count >= 8 or line_count >= 250:
+        if file_count >= 10 or line_count >= 300:
             return AnalyzerFinding(
-                score_delta=12,
-                reason="The change is broad and touches many files or a large number of lines.",
-                recommendation="Break the change into smaller PRs or add targeted review coverage.",
-                confidence=70,
+                score_delta=10,
+                reason="The change is broad and touches many files or lines.",
+                recommendation="Break the change into smaller PRs for safer auditability.",
+                rule_id="CODE_LARGE_CHANGE",
+                category="code_risk",
+                subcategory="blast_radius",
+                policy_action="REVIEW_REQUIRED",
+                severity="MEDIUM",
+                confidence=0.80,
                 metadata={"files": file_count, "lines": line_count},
             )
         return None
@@ -287,41 +300,24 @@ class LargeChangeAnalyzer(BaseAnalyzer):
 class DeletedValidationAnalyzer(BaseAnalyzer):
     name = "deleted-validation"
 
-    _META_REMOVED_TOKENS = (
-        "removed validation", "remove validation",
-        "removed middleware", "remove middleware",
-        "removed guard", "remove guard",
-        "removed check", "remove check",
-        "skip validation", "bypass validation",
-        "disable validation", "disabled validation",
-    )
-
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
-        # 1. Preferred: look for deleted lines (-) containing validation terms in patches.
-        for file_entry in context.get("changed_files", []):
-            patch = str(file_entry.get("patch", ""))
-            for line in patch.splitlines():
-                if not line.startswith("-"):
-                    continue
-                normalized = line[1:].strip().lower()
-                if any(token in normalized for token in VALIDATION_TERMS):
-                    return AnalyzerFinding(
-                        score_delta=14,
-                        reason="Validation or guard logic appears to have been removed.",
-                        recommendation="Restore or replace the removed validation logic and add regression tests.",
-                        confidence=85,
-                        metadata={"file": file_entry.get("filename"), "line": line.strip()},
-                    )
-        # 2. Fallback: check PR title, body, and commit message.
-        searchable_text = _get_searchable_text(context)
-        if any(token in searchable_text for token in self._META_REMOVED_TOKENS):
-            return AnalyzerFinding(
-                score_delta=14,
-                reason="Validation or guard logic removal described in PR metadata or commit message.",
-                recommendation="Restore or replace the removed validation logic and add regression tests.",
-                confidence=75,
-                metadata={"detection_method": "metadata_text"},
-            )
+        for file_name, line in _iter_changed_lines(context):
+            if not line.startswith("-"):
+                continue
+            normalized = line.lower()
+            if any(term in normalized for term in VALIDATION_TERMS) or "auth" in normalized or "session" in normalized or "guard" in normalized:
+                return AnalyzerFinding(
+                    score_delta=18,
+                    reason="Input validation, assertion, or guard check was deleted in patch.",
+                    recommendation="Verify that deleted validation code was superseded by equivalent safety guards.",
+                    rule_id="REMOVED_AUTH_MIDDLEWARE",
+                    category="authentication",
+                    subcategory="middleware_removal",
+                    policy_action="REVIEW_REQUIRED",
+                    severity="HIGH",
+                    confidence=0.92,
+                    metadata={"file": file_name, "line": line.strip()},
+                )
         return None
 
 
@@ -329,69 +325,45 @@ class SecretCredentialAnalyzer(BaseAnalyzer):
     name = "secrets"
 
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
-        # 1. Preferred: scan added lines (+) in patches with regex patterns.
-        for file_entry in context.get("changed_files", []):
-            patch = str(file_entry.get("patch", ""))
-            for line in patch.splitlines():
-                if not line.startswith("+"):
-                    continue
-                content = line[1:].strip()
-                if any(pattern.search(content) for pattern in SECRET_PATTERNS):
+        for file_name, line in _iter_changed_lines(context):
+            if line.startswith("-"):
+                continue
+            for pattern in SECRET_PATTERNS:
+                if pattern.search(line):
                     return AnalyzerFinding(
-                        score_delta=18,
-                        reason="The patch adds credential-like values or secret management material.",
-                        recommendation="Rotate any exposed credentials and move secrets to a secure secret store.",
-                        confidence=95,
-                        metadata={"file": file_entry.get("filename"), "line": content},
+                        score_delta=30,
+                        reason="Potential secret or hardcoded credential detected in patch.",
+                        recommendation="Remove hardcoded secret material and store in a secret manager.",
+                        rule_id="HARDCODED_SECRET",
+                        category="secrets",
+                        subcategory="api_key",
+                        policy_action="BLOCK",
+                        severity="CRITICAL",
+                        confidence=0.98,
+                        metadata={"file": file_name, "line": line.strip()},
                     )
-        # 2. Fallback: apply the same regex patterns to the unified searchable text.
-        searchable_text = _get_searchable_text(context)
-        for pattern in SECRET_PATTERNS:
-            match = pattern.search(searchable_text)
-            if match:
-                return AnalyzerFinding(
-                    score_delta=18,
-                    reason="Credential-like value or secret detected in PR metadata or commit message.",
-                    recommendation="Rotate any exposed credentials and move secrets to a secure secret store.",
-                    confidence=85,
-                    metadata={"detection_method": "metadata_text", "match": match.group(0)[:80]},
-                )
         return None
 
 
 class CriticalInfrastructureAnalyzer(BaseAnalyzer):
     name = "critical-infrastructure"
 
-    # Subset of CRITICAL_INFRA_FILES that may appear in free-text metadata.
-    _META_INFRA_TOKENS = (
-        "dockerfile", "docker-compose", ".env", "nginx.conf",
-        "terraform", "main.tf", "deployment.yaml", "deployment.yml",
-        "service.yaml", "service.yml", "ingress.yaml", "ingress.yml",
-        "requirements.txt", "pyproject.toml", "package.json",
-    )
-
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
-        # 1. Preferred: check changed file names in the diff.
         for file_entry in context.get("changed_files", []):
-            file_name = str(file_entry.get("filename", "")).lower()
-            if any(token in file_name for token in CRITICAL_INFRA_FILES):
+            filename = str(file_entry.get("filename", "")).lower()
+            patch = str(file_entry.get("patch", ""))
+            if "dockerfile" in filename and ("user root" in patch.lower() or "user 0" in patch.lower()):
                 return AnalyzerFinding(
-                    score_delta=12,
-                    reason="Critical infrastructure or deployment files were modified.",
-                    recommendation="Have the change reviewed by an operations or platform owner before shipping.",
-                    confidence=80,
-                    metadata={"file": file_name},
-                )
-        # 2. Fallback: check PR title, body, and commit message.
-        searchable_text = _get_searchable_text(context)
-        for token in self._META_INFRA_TOKENS:
-            if token in searchable_text:
-                return AnalyzerFinding(
-                    score_delta=12,
-                    reason="Critical infrastructure file name mentioned in PR metadata or commit message.",
-                    recommendation="Have the change reviewed by an operations or platform owner before shipping.",
-                    confidence=70,
-                    metadata={"detection_method": "metadata_text", "token": token},
+                    score_delta=20,
+                    reason="Dockerfile diff configures container to run as root user.",
+                    recommendation="Use a dedicated non-root USER instruction.",
+                    rule_id="DOCKER_ROOT_USER",
+                    category="docker",
+                    subcategory="privilege",
+                    policy_action="REVIEW_REQUIRED",
+                    severity="HIGH",
+                    confidence=0.98,
+                    metadata={"file": filename},
                 )
         return None
 
@@ -441,7 +413,7 @@ def _iter_changed_lines(context: dict[str, Any]):
         patch = str(file_entry.get("patch", ""))
         for line in patch.splitlines():
             if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
-                yield file_name, line[1:].strip()
+                yield file_name, line
 
 
 def fetch_pull_request_files(pr_url: str) -> list[dict[str, Any]]:
@@ -478,23 +450,16 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
         if fetched_files:
             files = fetched_files
 
-    if isinstance(payload.get("diff"), str) and payload.get("diff"):
-        files.append({"filename": payload.get("filename", "<diff>"), "patch": payload.get("diff")})
-
-    raw_changed_files = (
-        payload.get("changed_files")
-        or pr.get("changed_files")
-        or payload.get("pull_request", {}).get("changed_files")
-    )
-
-    if isinstance(raw_changed_files, list):
-        payload_changed_files = len(raw_changed_files)
-
-    elif isinstance(raw_changed_files, int):
-        payload_changed_files = raw_changed_files
-
+    raw_cf = payload.get("changed_files")
+    if isinstance(raw_cf, list):
+        payload_changed_files = len(raw_cf)
+    elif isinstance(raw_cf, (int, str)):
+        try:
+            payload_changed_files = int(raw_cf)
+        except (ValueError, TypeError):
+            payload_changed_files = 0
     else:
-        payload_changed_files = 0
+        payload_changed_files = int(pr.get("changed_files") or 0)
 
     # Preserve actual patch content so analyzers can inspect it.
     patch_text = "\n".join(str(item.get("patch", "")) for item in files if item.get("patch"))
@@ -527,7 +492,37 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
 
 def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
     context = build_analysis_context(payload)
-    findings = []
+    files = context.get("changed_files", [])
+    findings: list[AnalyzerFinding] = []
+
+    # Detect documentation-only pull requests
+    all_filenames = [str(f.get("filename", "")).lower() for f in files if f.get("filename")]
+    is_docs_only = len(all_filenames) > 0 and all(
+        fn.endswith((".md", ".txt", ".rst")) or fn.startswith("docs/") or "readme" in fn or "license" in fn
+        for fn in all_filenames
+    )
+
+    if is_docs_only:
+        deterministic_dicts: list[dict[str, Any]] = []
+        return {
+            "score": 5,
+            "severity": "low",
+            "confidence": 0.95,
+            "reasons": ["Documentation-only pull request detected."],
+            "recommendations": ["No code security review required for documentation changes."],
+            "deterministic_findings": deterministic_dicts,
+            "metadata": {
+                "changed_files": context.get("changed_file_count"),
+                "changed_lines": context.get("changed_line_count"),
+                "pull_request_title": (context.get("pull_request") or {}).get("title"),
+                "pull_request_body": (context.get("pull_request") or {}).get("body"),
+                "commit_message": (context.get("head_commit") or {}).get("message"),
+                "repository": (context.get("repository") or {}).get("name"),
+                "source": "pull_request" if context.get("pull_request") else "commit",
+                "findings": deterministic_dicts,
+                "deterministic_findings": deterministic_dicts,
+            },
+        }
 
     for analyzer in (
         SecuritySensitiveAnalyzer(),
@@ -543,28 +538,28 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
         if finding:
             findings.append(finding)
 
-    score = 10 + min(20, int(context.get("changed_file_count") or 0) * 2) + min(20, int(context.get("changed_line_count") or 0) * 0.05)
-    score += sum(finding.score_delta for finding in findings)
+    # --- Adaptive Scoring ---
+    if findings:
+        score = min(100, 10 + sum(f.score_delta for f in findings))
+    else:
+        score = min(25, 5 + min(15, int(context.get("changed_file_count") or 0) * 2))
+
     score = int(max(0, min(100, score)))
 
-    severity = "low"
-    if score >= 80:
+    if score >= 80 or any(f.severity.upper() == "CRITICAL" for f in findings):
         severity = "critical"
-    elif score >= 60:
+    elif score >= 55 or any(f.severity.upper() == "HIGH" for f in findings):
         severity = "high"
-    elif score >= 35:
+    elif score >= 30 or any(f.severity.upper() == "MEDIUM" for f in findings):
         severity = "medium"
+    else:
+        severity = "low"
 
-    confidence = 60
-    if findings:
-        confidence = int(sum(finding.confidence for finding in findings) / len(findings))
-    if context.get("patch_text"):
-        confidence = min(100, confidence + 10)
-    if context.get("text"):
-        confidence = min(100, confidence + 5)
+    confidence = 0.85 if context.get("patch_text") else 0.50
 
     reasons = [finding.reason for finding in findings]
     recommendations = [finding.recommendation for finding in findings]
+    deterministic_dicts = [f.to_dict() for f in findings]
 
     return {
         "score": score,
@@ -572,6 +567,7 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
         "confidence": confidence,
         "reasons": reasons,
         "recommendations": recommendations,
+        "deterministic_findings": deterministic_dicts,
         "metadata": {
             "changed_files": context.get("changed_file_count"),
             "changed_lines": context.get("changed_line_count"),
@@ -580,5 +576,8 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "commit_message": (context.get("head_commit") or {}).get("message"),
             "repository": (context.get("repository") or {}).get("name"),
             "source": "pull_request" if context.get("pull_request") else "commit",
+            "findings": deterministic_dicts,
+            "deterministic_findings": deterministic_dicts,
         },
     }
+

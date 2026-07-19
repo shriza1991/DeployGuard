@@ -182,7 +182,7 @@ export const DeploymentDetails: React.FC = () => {
   const [showRawJson, setShowRawJson] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({});
 
-  const fetchDetail = async () => {
+  const fetchDetail = React.useCallback(async () => {
     if (!id) return;
     setLoading(true);
     setError(null);
@@ -195,9 +195,11 @@ export const DeploymentDetails: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
 
-  useEffect(() => { fetchDetail(); }, [id]);
+  useEffect(() => {
+    fetchDetail();
+  }, [fetchDetail]);
 
   const triggerToast = (msg: string) => {
     setToastMessage(msg);

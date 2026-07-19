@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from .base import Finding, TextAnalyzer, rule
 
 
@@ -7,26 +8,114 @@ class KubernetesAnalyzer(TextAnalyzer):
     name = "kubernetes"
 
     rules = (
-        rule(r"\bprivileged\s*:\s*true\b|\bkubernetes\b[^\n.]*\bprivileged\b", "critical", "Kubernetes privileged mode is enabled.", "Remove privileged mode and use narrowly scoped Linux capabilities only when required."),
-        rule(r"\bhostnetwork\s*:?\s*true\b|\bhostnetwork\b", "high", "Kubernetes hostNetwork is enabled.", "Disable hostNetwork unless the workload explicitly requires host-level networking."),
-        rule(r"\bhostpid\s*:?\s*true\b|\bhostpid\b", "high", "Kubernetes hostPID is enabled.", "Disable hostPID to preserve pod process namespace isolation."),
-        rule(r"\bhostipc\s*:?\s*true\b|\bhostipc\b", "high", "Kubernetes hostIPC is enabled.", "Disable hostIPC to preserve pod IPC namespace isolation."),
-        rule(r"\bhostpath\b", "high", "Kubernetes hostPath volume detected.", "Replace hostPath with scoped persistent volumes or projected volumes where possible."),
-        rule(r"\ballowprivilegeescalation\s*:?\s*true\b|\ballowprivilegeescalation\b", "high", "Kubernetes allows privilege escalation.", "Set allowPrivilegeEscalation to false."),
-        rule(r"\brunasuser\s*:?\s*0\b", "critical", "Kubernetes workload runs as UID 0.", "Set runAsNonRoot to true and use a non-root runAsUser value."),
-        rule(r"\brunasroot\b|\brun\s+as\s+root\b", "high", "Kubernetes workload is configured to run as root.", "Set runAsNonRoot to true and use a non-root user."),
-        rule(r"\bautomountserviceaccounttoken\s*:?\s*true\b", "medium", "Kubernetes automounts the service account token.", "Set automountServiceAccountToken to false when API access is not required."),
-        rule(r"\bimage\s*:\s*\S+:latest\b|\bkubernetes\b[^\n.]*\blatest\s+image\b", "high", "Kubernetes workload uses a latest image tag.", "Pin container images to immutable versions or digests."),
-        rule(r"\bimagepullpolicy\s*:?\s*always\b", "medium", "Kubernetes imagePullPolicy is Always.", "Use immutable image tags and pull policies that support reproducible deployments."),
+        rule(
+            r"\bprivileged\s*:\s*true\b|\bkubernetes\b[^\n.]*\bprivileged\b",
+            severity="CRITICAL",
+            reason="Kubernetes pod is configured with privileged: true.",
+            recommendation="Remove privileged mode and use narrowly scoped Linux capabilities only when strictly required.",
+            rule_id="K8S_PRIVILEGED_POD",
+            category="kubernetes",
+            subcategory="privilege",
+            policy_action="BLOCK",
+            confidence=0.98,
+        ),
+        rule(
+            r"\bcapabilities\s*:\s*(?:\[?\s*[\"']?(?:CAP_SYS_ADMIN|ALL)[\"']?\s*\]?)",
+            severity="CRITICAL",
+            reason="Kubernetes container requests dangerous Linux capability (CAP_SYS_ADMIN or ALL).",
+            recommendation="Drop ALL capabilities and add back only minimal required Linux capabilities.",
+            rule_id="K8S_DANGEROUS_CAPABILITIES",
+            category="kubernetes",
+            subcategory="capabilities",
+            policy_action="BLOCK",
+            confidence=0.98,
+        ),
+        rule(
+            r"\brunasuser\s*:\s*0\b|\brunasroot\b",
+            severity="HIGH",
+            reason="Kubernetes workload is configured to run as UID 0 (root).",
+            recommendation="Set runAsNonRoot: true and specify a non-zero runAsUser.",
+            rule_id="K8S_RUN_AS_ROOT",
+            category="kubernetes",
+            subcategory="privilege",
+            policy_action="REVIEW_REQUIRED",
+            confidence=0.95,
+        ),
+        rule(
+            r"\bhostnetwork\s*:\s*true\b",
+            severity="HIGH",
+            reason="Kubernetes hostNetwork: true is enabled.",
+            recommendation="Disable hostNetwork to preserve pod network namespace isolation.",
+            rule_id="K8S_HOST_NETWORK",
+            category="kubernetes",
+            subcategory="networking",
+            policy_action="REVIEW_REQUIRED",
+            confidence=0.95,
+        ),
+        rule(
+            r"\bhostpid\s*:\s*true\b|\bhostipc\s*:\s*true\b",
+            severity="HIGH",
+            reason="Kubernetes hostPID or hostIPC namespace sharing is enabled.",
+            recommendation="Disable hostPID and hostIPC to maintain pod namespace isolation.",
+            rule_id="K8S_HOST_NAMESPACE",
+            category="kubernetes",
+            subcategory="isolation",
+            policy_action="REVIEW_REQUIRED",
+            confidence=0.95,
+        ),
+        rule(
+            r"\bpath\s*:\s*[\"']?/(?:proc|sys|var/run/docker\.sock|dev)[\"']?\b|\bhostpath\b",
+            severity="CRITICAL",
+            reason="Kubernetes volume mount points to sensitive host path (/proc, /sys, /var/run/docker.sock).",
+            recommendation="Avoid hostPath mounts into sensitive node directories.",
+            rule_id="K8S_UNSAFE_VOLUME_MOUNT",
+            category="kubernetes",
+            subcategory="storage",
+            policy_action="BLOCK",
+            confidence=0.98,
+        ),
+        rule(
+            r"\ballowprivilegeescalation\s*:\s*true\b",
+            severity="HIGH",
+            reason="Kubernetes allowPrivilegeEscalation is set to true.",
+            recommendation="Set allowPrivilegeEscalation: false in securityContext.",
+            rule_id="K8S_PRIVILEGE_ESCALATION",
+            category="kubernetes",
+            subcategory="privilege",
+            policy_action="REVIEW_REQUIRED",
+            confidence=0.95,
+        ),
+        rule(
+            r"\bimage\s*:\s*\S+:latest\b",
+            severity="HIGH",
+            reason="Kubernetes deployment image tag uses latest.",
+            recommendation="Pin container images to specific immutable tags or digests.",
+            rule_id="K8S_LATEST_TAG",
+            category="kubernetes",
+            subcategory="unpinned_version",
+            policy_action="REVIEW_REQUIRED",
+            confidence=0.95,
+        ),
     )
 
-    def analyze(self, text: str) -> list[Finding]:
-        findings = super().analyze(text)
-        mentions_kubernetes = any(token in text for token in ("kubernetes", "k8s", "deployment.yaml", "pod", "helm"))
-        if mentions_kubernetes and "resources:" not in text and "limits:" not in text and "resource limits" not in text:
-            findings.append(Finding("medium", "Kubernetes resource limits are missing.", "Define CPU and memory requests and limits for each workload.", 8, 70))
-        if mentions_kubernetes and "readinessprobe" not in text and "readiness probe" not in text:
-            findings.append(Finding("medium", "Kubernetes readinessProbe is missing.", "Add a readinessProbe so traffic only reaches ready pods.", 8, 70))
-        if mentions_kubernetes and "livenessprobe" not in text and "liveness probe" not in text:
-            findings.append(Finding("medium", "Kubernetes livenessProbe is missing.", "Add a livenessProbe so failed containers can be restarted.", 8, 70))
+    def analyze(self, text: str, file_path: str = "deployment.yaml") -> list[Finding]:
+        findings = super().analyze(text, file_path=file_path)
+        mentions_kubernetes = any(token in text.lower() for token in ("kubernetes", "k8s", "deployment", "pod", "helm"))
+        
+        if mentions_kubernetes and "resources:" not in text.lower() and "limits:" not in text.lower():
+            findings.append(
+                Finding(
+                    severity="MEDIUM",
+                    weight=8,
+                    reason="Kubernetes resource limits are missing.",
+                    recommendation="Define CPU and memory requests and limits for each container.",
+                    rule_id="K8S_MISSING_RESOURCE_LIMITS",
+                    category="kubernetes",
+                    subcategory="resources",
+                    policy_action="REVIEW_REQUIRED",
+                    confidence=0.80,
+                    evidence={"file": file_path, "matched": "missing resources/limits"},
+                )
+            )
         return findings
+

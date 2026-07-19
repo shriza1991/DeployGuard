@@ -86,6 +86,30 @@ export const Agents: React.FC = () => {
         </div>
       </div>
 
+      {/* Fleet Overview Bar */}
+      <div className="glass-panel" style={{ padding: '16px 24px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+        <div style={{ display: 'flex', gap: '32px', alignItems: 'center' }}>
+          <div>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }} className="font-mono">TOTAL EVALUATIONS</span>
+            <div style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }} className="font-mono">{totalScans}</div>
+          </div>
+          <div>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }} className="font-mono">FLEET CONFIDENCE MEAN</span>
+            <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--color-safe)' }} className="font-mono">{liveAvgConfidence}</div>
+          </div>
+          <div>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }} className="font-mono">LAST SCAN RUN</span>
+            <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-cyan)' }} className="font-mono">{liveLastRun}</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Active Workers:</span>
+          <span className="font-mono" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--color-safe)' }}>
+            {agents.filter(a => a.status === 'online').length} / {agents.length} Online
+          </span>
+        </div>
+      </div>
+
       {agentQuery.isLoading ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '40vh', gap: '16px', color: 'var(--text-muted)' }}>
           <span style={{ animation: 'spin 1s linear infinite' }}>⏳</span>

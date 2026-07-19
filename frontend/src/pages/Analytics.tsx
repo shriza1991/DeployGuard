@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { api } from '../api/client';
 import type { DeploymentEvent } from '../api/client';
 import {
@@ -80,7 +80,7 @@ export const Analytics: React.FC = () => {
   const [newThreatType, setNewThreatType] = useState('Hardcoded Stripe API Secret');
   const [newRiskScore, setNewRiskScore] = useState(84);
 
-  const fetchDeployments = async () => {
+  const fetchDeployments = useCallback(async () => {
     try {
       const data = await api.getDeployments();
       setDeployments(data);
@@ -89,39 +89,39 @@ export const Analytics: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const fetchAnalytics = useCallback(async () => {
+    try {
+      const [summaryData, volumeData, decisionData, blocksData] =
+        await Promise.all([
+          getAnalyticsSummary({ range: timeRange }),
+          getAnalyticsVolume({ range: timeRange }),
+          getAnalyticsDecisions({ range: timeRange }),
+          getAnalyticsBlocks({
+            range: timeRange,
+            severity:
+              severityFilter === "ALL" ? undefined : severityFilter,
+            search: searchQuery || undefined,
+          }),
+        ]);
+
+      setSummary(summaryData);
+      setVolumeSummary(volumeData);
+      setDecisionSummary(decisionData);
+      setBlocksSummary(blocksData);
+    } catch (err) {
+      console.error("Analytics fetch failed", err);
+    }
+  }, [timeRange, severityFilter, searchQuery]);
 
   useEffect(() => {
-  fetchDeployments(); // keeps sparkline/histogram working
-}, []);
+    fetchDeployments();
+  }, [fetchDeployments]);
 
-useEffect(() => {
-  fetchAnalytics();
-}, [timeRange, severityFilter, searchQuery]);
-
-  const fetchAnalytics = async () => {
-  try {
-    const [summaryData, volumeData, decisionData, blocksData] =
-      await Promise.all([
-        getAnalyticsSummary({ range: timeRange }),
-        getAnalyticsVolume({ range: timeRange }),
-        getAnalyticsDecisions({ range: timeRange }),
-        getAnalyticsBlocks({
-          range: timeRange,
-          severity:
-            severityFilter === "ALL" ? undefined : severityFilter,
-          search: searchQuery || undefined,
-        }),
-      ]);
-
-    setSummary(summaryData);
-    setVolumeSummary(volumeData);
-    setDecisionSummary(decisionData);
-    setBlocksSummary(blocksData);
-  } catch (err) {
-    console.error("Analytics fetch failed", err);
-  }
-};
+  useEffect(() => {
+    fetchAnalytics();
+  }, [fetchAnalytics]);
 
   // Filter deployments by selected timeRange
   const timeFilteredDeployments = useMemo(() => {

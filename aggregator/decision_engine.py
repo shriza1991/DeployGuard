@@ -14,37 +14,60 @@ SEVERITY_ORDER = {
     "low": 1,
     "medium": 2,
     "high": 3,
-    "critical": 4
+    "critical": 4,
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
 }
 
-def check_repeated_production_failures(history_result: Dict[str, Any]) -> bool:
-    similar_incidents = history_result.get("similar_incidents", [])
-    reasons = history_result.get("reasons", [])
-    
-    # Heuristics check
-    has_production_reason = any("production incidents" in r.lower() for r in reasons)
-    
-    failure_outcomes = {"production outage", "partial outage", "rollback", "hotfix", "security incident"}
-    
-    prod_failures_count = 0
-    for inc in similar_incidents:
-        outcome = str(inc.get("outcome", "")).lower()
-        severity = str(inc.get("severity", "")).lower()
-        if outcome in failure_outcomes or severity in {"high", "critical"}:
-            prod_failures_count += 1
-            
-    # If we have >= 2 failures, or if we have at least 1 failures and incident-history flagged production reason
-    if prod_failures_count >= 2 or (prod_failures_count >= 1 and has_production_reason):
-        return True
-    return False
+
+def collect_all_findings(agent_results: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collects all structured findings across agents without requiring specific rule IDs."""
+    findings: List[Dict[str, Any]] = []
+    for agent_name, result in agent_results.items():
+        if not isinstance(result, dict):
+            continue
+        
+        # Check top-level keys or metadata dict
+        extracted = (
+            result.get("deterministic_findings")
+            or result.get("findings")
+            or result.get("metadata", {}).get("deterministic_findings")
+            or result.get("metadata", {}).get("findings")
+            or []
+        )
+        if isinstance(extracted, list):
+            for item in extracted:
+                if isinstance(item, dict):
+                    findings.append(item)
+    return findings
+
 
 def make_decision(correlation_id: str, agent_results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    # Calculate score using available agents
+    # 1. Collect all findings
+    all_findings = collect_all_findings(agent_results)
+    
+    # 2. Separate deterministic findings vs LLM findings
+    deterministic_findings = all_findings
+    llm_findings = []
+    
+    for agent_name, result in agent_results.items():
+        llm_data = result.get("llm") or {}
+        if isinstance(llm_data, dict) and llm_data.get("summary"):
+            llm_findings.append({
+                "agent": agent_name,
+                "summary": llm_data.get("summary"),
+                "risk_reasoning": llm_data.get("risk_reasoning", []),
+                "recommendations": llm_data.get("recommendations", []),
+                "confidence": llm_data.get("confidence", 0.0),
+            })
+
+    # 3. Calculate weighted overall score and overall confidence
     weighted_sum = 0.0
     weight_sum = 0.0
     confidences = []
     
-    # Process scores and confidences
     for agent_name, result in agent_results.items():
         if agent_name in WEIGHTS:
             score = result.get("score", 0)
@@ -52,92 +75,84 @@ def make_decision(correlation_id: str, agent_results: Dict[str, Dict[str, Any]])
             weighted_sum += score * weight
             weight_sum += weight
             
-            # Confidence
             conf = result.get("confidence", 0.0)
             confidences.append(conf)
 
-    if weight_sum > 0:
-        overall_score = round(weighted_sum / weight_sum)
-    else:
-        overall_score = 0
+    overall_score = round(weighted_sum / weight_sum) if weight_sum > 0 else 0
+    overall_confidence = round(sum(confidences) / len(confidences), 2) if confidences else 0.0
 
-    # Increase score by +10 if historical incidents contain repeated production failures
-    history_result = agent_results.get("incident-history")
-    has_repeated_failures = False
-    if history_result:
-        has_repeated_failures = check_repeated_production_failures(history_result)
-        if has_repeated_failures:
-            overall_score += 10
-            overall_score = min(overall_score, 100)
-            logger.info(f"Repeated production failures detected. Score increased by +10 to {overall_score}")
+    # 4. GENERIC POLICY ENGINE EVALUATION (No hardcoded rule IDs)
+    block_policy_findings = [
+        f for f in all_findings
+        if str(f.get("policy_action")).upper() == "BLOCK" or str(f.get("severity")).upper() == "CRITICAL"
+    ]
+    
+    review_policy_findings = [
+        f for f in all_findings
+        if str(f.get("policy_action")).upper() == "REVIEW_REQUIRED" or str(f.get("severity")).upper() == "HIGH"
+    ]
 
-    # Determine confidence
-    if confidences:
-        overall_confidence = round(sum(confidences) / len(confidences), 2)
-    else:
-        overall_confidence = 0.0
-
-    # Determine decision
-    if overall_score >= 60:
+    # Evaluate decision using Policy Engine
+    if block_policy_findings:
         decision = "BLOCK"
-    elif overall_score >= 30:
+        severity = "CRITICAL"
+        logger.info(f"[PolicyEngine] Decision = BLOCK due to {len(block_policy_findings)} critical policy findings")
+    elif review_policy_findings or len([f for f in all_findings if str(f.get("severity")).upper() == "MEDIUM"]) >= 2:
         decision = "REVIEW"
+        severity = "HIGH" if review_policy_findings else "MEDIUM"
+        logger.info(f"[PolicyEngine] Decision = REVIEW due to policy findings")
     else:
-        decision = "SAFE"
-
-    # Override rules: ANY agent reports severity == CRITICAL -> immediately return BLOCK
-    has_critical_override = False
-    for agent_name, result in agent_results.items():
-        if str(result.get("severity", "")).upper() == "CRITICAL":
+        # Fallback to adaptive score thresholding
+        if overall_score >= 60:
             decision = "BLOCK"
-            has_critical_override = True
-            logger.info(f"Severity CRITICAL detected in {agent_name}. Overriding decision to BLOCK")
+            severity = "HIGH"
+        elif overall_score >= 30:
+            decision = "REVIEW"
+            severity = "MEDIUM"
+        else:
+            decision = "SAFE"
+            severity = "LOW"
 
-    # Determine overall severity based on overall score
-    if overall_score >= 85:
-        severity = "CRITICAL"
-    elif overall_score >= 60:
-        severity = "HIGH"
-    elif overall_score >= 30:
-        severity = "MEDIUM"
-    else:
-        severity = "LOW"
+    # Adjust overall score to reflect policy verdict overrides
+    if decision == "BLOCK":
+        overall_score = max(overall_score, 85)
+    elif decision == "REVIEW":
+        overall_score = max(overall_score, min(80, 45 + (len(review_policy_findings) - 1) * 10))
 
-    # Ensure overall severity matches max agent severity if agent has critical/high
-    max_agent_severity_val = 0
-    max_agent_severity_str = "LOW"
-    for result in agent_results.values():
-        agent_sev = str(result.get("severity", "")).lower()
-        val = SEVERITY_ORDER.get(agent_sev, 1)
-        if val > max_agent_severity_val:
-            max_agent_severity_val = val
-            max_agent_severity_str = agent_sev.upper()
-
-    # If an agent was critical, final severity should be CRITICAL
-    if has_critical_override or max_agent_severity_str == "CRITICAL":
-        severity = "CRITICAL"
-    elif max_agent_severity_str == "HIGH" and severity not in {"HIGH", "CRITICAL"}:
-        severity = "HIGH"
-
-    # Merge reasons and recommendations
+    # 5. Build explainable reasons & recommendations
     reasons: List[str] = []
     recommendations: List[str] = []
-    
-    # Sort agents by severity order to merge their reasons
-    sorted_agents = sorted(
-        agent_results.items(),
-        key=lambda item: SEVERITY_ORDER.get(str(item[1].get("severity", "")).lower(), 1),
-        reverse=True
-    )
-    
-    for agent_name, result in sorted_agents:
+
+    # Priority 1: Deterministic policy findings reasons
+    for finding in all_findings:
+        rule_id = finding.get("rule_id", "POLICY_RULE")
+        desc = finding.get("description") or finding.get("reason", "")
+        ev = finding.get("evidence") or {}
+        file_path = ev.get("file") or "unknown"
+        line_num = ev.get("line")
+        matched = ev.get("matched")
+
+        ev_str = f" in {file_path}"
+        if line_num:
+            ev_str += f":line {line_num}"
+        if matched:
+            ev_str += f" ('{matched}')"
+
+        reason_entry = f"[{rule_id}] {desc}{ev_str}"
+        reasons.append(reason_entry)
+
+        rec = finding.get("recommendation")
+        if rec:
+            recommendations.append(f"[{rule_id}] {rec}")
+
+    # Fallback/additional agent reasons
+    for agent_name, result in agent_results.items():
         reasons.extend(result.get("reasons", []))
         recommendations.extend(result.get("recommendations", []))
 
     reasons = deduplicate_list(reasons)
     recommendations = deduplicate_list(recommendations)
 
-    # Executive summary
     summary = build_executive_summary(agent_results, decision, overall_score)
 
     return {
@@ -147,8 +162,11 @@ def make_decision(correlation_id: str, agent_results: Dict[str, Dict[str, Any]])
         "decision": decision,
         "severity": severity,
         "agents": agent_results,
+        "deterministic_findings": deterministic_findings,
+        "llm_findings": llm_findings,
         "summary": summary,
         "reasons": reasons,
         "recommendations": recommendations,
         "generated_at": get_utc_now_iso()
     }
+

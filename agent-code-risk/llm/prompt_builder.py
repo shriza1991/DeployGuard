@@ -297,16 +297,18 @@ def build_prompt(
         for ev in evidence_list:
             meta = ev.metadata
             ev_file = meta.get("file_path") or "unknown"
-            ev_summary = generate_chunk_summary(ev_file, ev.text)
+            score_val_str = f"{meta.get('score'):.3f}" if meta.get('score') is not None else "N/A"
+            reason_matched = meta.get("retrieval_reason") or "Semantic similarity lookup"
 
             block = (
-                f"File:\n{ev_file}\n\n"
-                f"Summary:\n{ev_summary}\n\n"
-                f"Relevant Code:\n{ev.text}"
+                f"File: {ev_file}\n"
+                f"Matched chunk:\n{ev.text}\n"
+                f"Similarity: {score_val_str}\n"
+                f"Reason matched: {reason_matched}"
             )
             ev_blocks.append(block)
 
-        evidence_section = "Repository Evidence\n\n" + "\n\n--------------------\n\n".join(ev_blocks)
+        evidence_section = "Repository Search Evidence\n\n" + "\n\n--------------------\n\n".join(ev_blocks)
         
         if summary_block:
             relevant_evidence_text = summary_block + "\n" + evidence_section

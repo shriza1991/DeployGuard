@@ -24,5 +24,14 @@
   "repository-context-service/test_service.py::TestRepositoryContextRoute::test_context_metrics_thresholding_and_error_handling",
   "repository-context-service/test_service.py::TestUtilities::test_file_filters",
   "repository-context-service/test_service.py::TestUtilities::test_language_detector",
-  "repository-context-service/test_service.py::TestUtilities::test_tech_signature_detection"
+  "repository-context-service/test_service.py::TestUtilities::test_tech_signature_detection",
+  "test_regression_suite.py::test_scenario_aws_secret_key",
+  "test_regression_suite.py::test_scenario_dependency_update",
+  "test_regression_suite.py::test_scenario_open_ssh_ingress",
+  "test_regression_suite.py::test_scenario_privileged_kubernetes",
+  "test_regression_suite.py::test_scenario_public_s3_bucket",
+  "test_regression_suite.py::test_scenario_readme_only",
+  "test_regression_suite.py::test_scenario_remove_auth_middleware",
+  "test_regression_suite.py::test_scenario_user_root",
+  "test_regression_suite.py::test_scenario_user_root_plus_latest"
 ]

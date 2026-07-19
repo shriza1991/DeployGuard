@@ -9,6 +9,17 @@ from infra_risk.analyzers import ANALYZERS, dedupe_findings
 
 logger = logging.getLogger("infra-risk-agent.analyzers")
 
+SEVERITY_WEIGHTS = {
+    "CRITICAL": 4,
+    "HIGH": 3,
+    "MEDIUM": 2,
+    "LOW": 1,
+    "critical": 4,
+    "high": 3,
+    "medium": 2,
+    "low": 1,
+}
+
 
 def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     pr = payload.get("pull_request") or {}
@@ -25,12 +36,16 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(payload.get("diff"), str) and payload.get("diff"):
         files.append({"filename": payload.get("filename", "<diff>"), "patch": payload.get("diff")})
 
-    payload_changed_files = int(
-        payload.get("changed_files")
-        or pr.get("changed_files")
-        or payload.get("pull_request", {}).get("changed_files")
-        or 0
-    )
+    raw_cf = payload.get("changed_files")
+    if isinstance(raw_cf, list):
+        payload_changed_files = len(raw_cf)
+    elif isinstance(raw_cf, (int, str)):
+        try:
+            payload_changed_files = int(raw_cf)
+        except (ValueError, TypeError):
+            payload_changed_files = 0
+    else:
+        payload_changed_files = int(pr.get("changed_files") or 0)
 
     file_names = "\n".join(str(item.get("filename", "")) for item in files if item.get("filename"))
     patch_text = "\n".join(str(item.get("patch", "")) for item in files if item.get("patch"))
@@ -67,57 +82,112 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
 def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
     context = build_analysis_context(payload)
-    text = str(context.get("text") or "")
+    files = context.get("changed_files", [])
+    patch_text = str(context.get("patch_text") or "")
+    
     findings = []
 
-    logger.info("Analyzer started")
-    for analyzer in ANALYZERS:
-        analyzer_started_at = time.perf_counter()
-        results = analyzer.analyze(text)
-        findings.extend(results)
-        contribution = sum(finding.weight for finding in results)
-        logger.info(
-            "Analyzer findings",
-            extra={
-                "analyzer": analyzer.name,
-                "findings": len(results),
-                "score_contribution": contribution,
-                "execution_time_ms": round((time.perf_counter() - analyzer_started_at) * 1000, 2),
+    logger.info("Analyzer started on %d files", len(files))
+    
+    # Check if PR is documentation-only
+    all_filenames = [str(f.get("filename", "")).lower() for f in files if f.get("filename")]
+    is_docs_only = len(all_filenames) > 0 and all(
+        fn.endswith((".md", ".txt", ".rst")) or fn.startswith("docs/") or "readme" in fn or "license" in fn
+        for fn in all_filenames
+    )
+
+    if is_docs_only:
+        deterministic_dicts: list[dict[str, Any]] = []
+        return {
+            "score": 0,
+            "severity": "low",
+            "confidence": 0.95,
+            "reasons": ["Documentation-only pull request detected."],
+            "recommendations": ["No infrastructure risk review required for documentation changes."],
+            "deterministic_findings": deterministic_dicts,
+            "metadata": {
+                "changed_files": context.get("changed_file_count"),
+                "changed_lines": context.get("changed_line_count"),
+                "pull_request_title": (context.get("pull_request") or {}).get("title"),
+                "pull_request_body": (context.get("pull_request") or {}).get("body"),
+                "commit_message": (context.get("head_commit") or {}).get("message"),
+                "repository": (context.get("repository") or {}).get("name"),
+                "source": "pull_request" if context.get("pull_request") else "commit",
+                "findings": deterministic_dicts,
+                "deterministic_findings": deterministic_dicts,
             },
-        )
-        logger.info("Score contribution: %s=%s", analyzer.name, contribution)
+        }
+
+    if files:
+        for file_entry in files:
+            filename = str(file_entry.get("filename", "") or file_entry.get("file_path", "") or "unknown")
+            patch = str(file_entry.get("patch", "") or "")
+            content_to_analyze = f"{filename}\n{patch}" if patch else filename
+            
+            for analyzer in ANALYZERS:
+                results = analyzer.analyze(content_to_analyze, file_path=filename)
+                findings.extend(results)
+    else:
+        text = str(context.get("text") or "")
+        for analyzer in ANALYZERS:
+            results = analyzer.analyze(text, file_path="infrastructure.yaml")
+            findings.extend(results)
 
     findings = dedupe_findings(findings)
-    score = int(max(0, min(100, sum(finding.weight for finding in findings))))
 
-    if score <= 20:
-        severity = "low"
-    elif score <= 50:
-        severity = "medium"
-    elif score <= 80:
-        severity = "high"
-    else:
-        severity = "critical"
-
-    confidence = 60
+    # --- Adaptive Scoring ---
+    has_diff = bool(patch_text.strip() or len(files) > 0)
+    
     if findings:
-        confidence = int(sum(finding.confidence for finding in findings) / len(findings))
-    if context.get("patch_text"):
-        confidence = min(100, confidence + 15)
-    if context.get("text"):
-        confidence = min(100, confidence + 5)
+        max_severity = max(SEVERITY_WEIGHTS.get(f.severity, 0) for f in findings)
+        block_rules = [f for f in findings if f.policy_action == "BLOCK" or f.severity.upper() == "CRITICAL"]
+        review_rules = [f for f in findings if f.policy_action == "REVIEW_REQUIRED" or f.severity.upper() == "HIGH"]
+        
+        if block_rules:
+            # Critical / Block rule triggered -> Deterministic findings dominate
+            score = max(85, min(100, sum(f.weight for f in findings)))
+        elif review_rules:
+            # High / Review rule triggered
+            score = max(50, min(80, sum(f.weight for f in findings)))
+        else:
+            score = min(40, sum(f.weight for f in findings))
+    else:
+        score = 0
+
+    # Severity string for agent payload
+    if score >= 85 or any(f.severity.upper() == "CRITICAL" for f in findings):
+        severity = "critical"
+    elif score >= 50 or any(f.severity.upper() == "HIGH" for f in findings):
+        severity = "high"
+    elif score >= 20 or any(f.severity.upper() == "MEDIUM" for f in findings):
+        severity = "medium"
+    else:
+        severity = "low"
+
+    # --- Confidence Computation ---
+    if has_diff and findings:
+        confidence = 0.95
+    elif has_diff:
+        confidence = 0.88
+    elif findings:
+        confidence = 0.70
+    else:
+        confidence = 0.40
 
     reasons = [finding.reason for finding in findings]
     recommendations = [finding.recommendation for finding in findings]
+    deterministic_findings_dicts = [f.to_dict() for f in findings]
+
     execution_time_ms = round((time.perf_counter() - started_at) * 1000, 2)
-    logger.info("Final score: %s severity=%s execution_time_ms=%s", score, severity, execution_time_ms)
+    logger.info("Final score: %s severity=%s confidence=%.2f execution_time_ms=%s", score, severity, confidence, execution_time_ms)
 
     return {
-        "score": score,
+        "score": int(score),
         "severity": severity,
-        "confidence": confidence,
+        "confidence": float(confidence),
         "reasons": reasons,
         "recommendations": recommendations,
+        "deterministic_findings": deterministic_findings_dicts,
         "metadata": {
             "changed_files": context.get("changed_file_count"),
             "changed_lines": context.get("changed_line_count"),
@@ -126,5 +196,8 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "commit_message": (context.get("head_commit") or {}).get("message"),
             "repository": (context.get("repository") or {}).get("name"),
             "source": "pull_request" if context.get("pull_request") else "commit",
+            "findings": deterministic_findings_dicts,
+            "deterministic_findings": deterministic_findings_dicts,
         },
     }
+
