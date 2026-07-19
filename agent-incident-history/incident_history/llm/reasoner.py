@@ -89,15 +89,52 @@ def _build_prompt(deployment_document: str, deterministic_result: dict[str, Any]
         }
         for item in incidents
     ]
+    incident_text = json.dumps(incident_payload, indent=2, sort_keys=True)
+    deterministic_text = normalized_json(deterministic_result)
+
     return (
-        "You are the Incident History Agent for DeployGuard. Return structured JSON only.\n"
-        "Analyze whether this deployment resembles previous production incidents. Explain recurring patterns, "
-        "why the incidents matter, deployment risk, and actionable recommendations.\n"
-        "Required JSON fields: summary, risk_reasoning, recommendations, confidence, available.\n\n"
-        f"Deployment document:\n{deployment_document[:6000]}\n\n"
-        f"Deterministic result:\n{normalized_json(deterministic_result)}\n\n"
-        f"Retrieved incidents:\n{json.dumps(incident_payload, sort_keys=True)}"
+        "You are a Staff DevSecOps Engineer analyzing historical incident patterns for DeployGuard.\n"
+        "Your job is to reason about whether this deployment resembles previous production failures,\n"
+        "identify recurring failure patterns, and produce actionable recommendations.\n"
+        "You reason from the evidence provided — not from generic assumptions.\n\n"
+        "-------------------------------------------------\n"
+        "Deployment Being Evaluated\n"
+        f"{deployment_document[:4000]}\n\n"
+        "-------------------------------------------------\n"
+        "Deterministic Risk Assessment\n"
+        f"{deterministic_text}\n\n"
+        "-------------------------------------------------\n"
+        "Matched Historical Incidents (ordered by similarity)\n"
+        f"{incident_text}\n\n"
+        "-------------------------------------------------\n"
+        "Task\n"
+        "Analyze whether this deployment shares characteristics with the matched historical incidents.\n"
+        "Think like a Staff DevSecOps Engineer:\n"
+        "  - WHICH specific incidents (by incident_id) are most relevant, and WHY?\n"
+        "  - WHAT root cause pattern do they share with this deployment?\n"
+        "  - DID the matched incidents result in rollbacks or production failures?\n"
+        "  - HOW severe was the blast radius of those historical incidents?\n"
+        "  - WHAT concrete action should the team take before merging this change?\n\n"
+        "Rules:\n"
+        "  - Only cite incidents that are genuinely similar (similarity >= 0.70).\n"
+        "  - Do NOT fabricate incident details not present in the provided data.\n"
+        "  - If no incidents are highly similar, say so and recommend proceeding with caution.\n"
+        "  - Confidence calibration:\n"
+        "      >= 0.85 → multiple high-similarity incidents (>= 0.80) with matching root cause\n"
+        "      0.65-0.84 → one or more moderate-similarity incidents (>= 0.70)\n"
+        "      0.40-0.64 → low-similarity matches, pattern is weak\n"
+        "      < 0.40 → no meaningful historical match found\n\n"
+        "IMPORTANT: Return ONLY a valid JSON object. No Markdown. No code fences.\n"
+        "Required JSON shape:\n"
+        "{\n"
+        '  "summary": "...",\n'
+        '  "risk_reasoning": ["...", "..."],\n'
+        '  "recommendations": ["...", "..."],\n'
+        '  "confidence": 0.75,\n'
+        '  "available": true\n'
+        "}\n"
     )
+
 
 
 def _normalize_response(response: dict[str, Any], provider_name: str) -> LLMResult:

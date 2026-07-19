@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
 from typing import Any
 
@@ -79,15 +81,25 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from technology_detector import infer_repository_capabilities
+except ImportError:
+    def infer_repository_capabilities(ctx):
+        return {"docker", "kubernetes", "terraform", "github_actions", "secrets", "authentication"}
+
+
 def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
     context = build_analysis_context(payload)
     files = context.get("changed_files", [])
     patch_text = str(context.get("patch_text") or "")
     
+    capabilities = infer_repository_capabilities(context)
     findings = []
 
-    logger.info("Analyzer started on %d files", len(files))
+    logger.info("Analyzer started on %d files. Inferred capabilities: %s", len(files), capabilities)
     
     # Check if PR is documentation-only
     all_filenames = [str(f.get("filename", "")).lower() for f in files if f.get("filename")]
@@ -98,6 +110,15 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
 
     if is_docs_only:
         deterministic_dicts: list[dict[str, Any]] = []
+        breakdown = {
+            "git_diff": 0,
+            "deterministic_findings": 0,
+            "repository_context": 0,
+            "incident_history": 0,
+            "metadata": 0,
+            "synergy_bonus": 0,
+            "pre_existing_penalty": 0,
+        }
         return {
             "score": 0,
             "severity": "low",
@@ -105,6 +126,7 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "reasons": ["Documentation-only pull request detected."],
             "recommendations": ["No infrastructure risk review required for documentation changes."],
             "deterministic_findings": deterministic_dicts,
+            "score_breakdown": breakdown,
             "metadata": {
                 "changed_files": context.get("changed_file_count"),
                 "changed_lines": context.get("changed_line_count"),
@@ -115,8 +137,19 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
                 "source": "pull_request" if context.get("pull_request") else "commit",
                 "findings": deterministic_dicts,
                 "deterministic_findings": deterministic_dicts,
+                "score_breakdown": breakdown,
+                "inferred_capabilities": list(capabilities),
             },
         }
+
+    analyzer_capability_map = {
+        "docker": "docker",
+        "kubernetes": "kubernetes",
+        "terraform": "terraform",
+        "github-actions": "github_actions",
+        "docker-compose": "docker",
+        "secrets": "secrets",
+    }
 
     if files:
         for file_entry in files:
@@ -125,36 +158,116 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
             content_to_analyze = f"{filename}\n{patch}" if patch else filename
             
             for analyzer in ANALYZERS:
-                results = analyzer.analyze(content_to_analyze, file_path=filename)
-                findings.extend(results)
+                analyzer_cap = analyzer_capability_map.get(getattr(analyzer, "name", ""), "secrets")
+                if analyzer_cap in capabilities:
+                    results = analyzer.analyze(content_to_analyze, file_path=filename)
+                    findings.extend(results)
     else:
         text = str(context.get("text") or "")
         for analyzer in ANALYZERS:
-            results = analyzer.analyze(text, file_path="infrastructure.yaml")
-            findings.extend(results)
+            analyzer_cap = analyzer_capability_map.get(getattr(analyzer, "name", ""), "secrets")
+            if analyzer_cap in capabilities:
+                results = analyzer.analyze(text, file_path="infrastructure.yaml")
+                findings.extend(results)
 
     findings = dedupe_findings(findings)
 
-    # --- Adaptive Scoring ---
+    # --- EVIDENCE ACCUMULATION SCORING MODEL ---
+    file_count = int(context.get("changed_file_count") or 0)
     has_diff = bool(patch_text.strip() or len(files) > 0)
-    
-    if findings:
-        max_severity = max(SEVERITY_WEIGHTS.get(f.severity, 0) for f in findings)
-        block_rules = [f for f in findings if f.policy_action == "BLOCK" or f.severity.upper() == "CRITICAL"]
-        review_rules = [f for f in findings if f.policy_action == "REVIEW_REQUIRED" or f.severity.upper() == "HIGH"]
-        
-        if block_rules:
-            # Critical / Block rule triggered -> Deterministic findings dominate
-            score = max(85, min(100, sum(f.weight for f in findings)))
-        elif review_rules:
-            # High / Review rule triggered
-            score = max(50, min(80, sum(f.weight for f in findings)))
-        else:
-            score = min(40, sum(f.weight for f in findings))
+
+    if not has_diff and not findings:
+        git_diff_score = 0
     else:
+        git_diff_score = min(20, 5 + file_count * 3)
+
+    severity_weights = {
+        "CRITICAL": 35,
+        "HIGH": 25,
+        "MEDIUM": 12,
+        "LOW": 4,
+    }
+    decay_multipliers = [1.0, 0.7, 0.5, 0.3]
+
+    findings_by_severity: dict[str, list[Finding]] = {
+        "CRITICAL": [],
+        "HIGH": [],
+        "MEDIUM": [],
+        "LOW": [],
+    }
+
+    for f in findings:
+        sev = f.severity.upper()
+        if sev in findings_by_severity:
+            findings_by_severity[sev].append(f)
+        else:
+            findings_by_severity["MEDIUM"].append(f)
+
+    deterministic_findings_score = 0.0
+    pre_existing_penalty = 0.0
+
+    for sev, group in findings_by_severity.items():
+        base_w = severity_weights.get(sev, 10)
+        for idx, finding in enumerate(group):
+            mult = decay_multipliers[min(idx, len(decay_multipliers) - 1)]
+            effective_weight = base_w * mult
+            
+            matched_str = str((finding.evidence or {}).get("matched") or "").strip()
+            is_new = bool(matched_str and matched_str in patch_text) if patch_text else True
+
+            if is_new:
+                deterministic_findings_score += effective_weight
+            else:
+                deterministic_findings_score += effective_weight * 0.20
+                pre_existing_penalty += effective_weight * 0.80
+
+    deterministic_findings_score = round(deterministic_findings_score)
+    pre_existing_penalty = round(pre_existing_penalty)
+
+    # Synergy Bonuses (Compound Risk)
+    rule_ids = {f.rule_id for f in findings}
+    synergy_bonus = 0
+
+    if "DOCKER_ROOT_USER" in rule_ids and ("DOCKER_LATEST_TAG" in rule_ids or "DOCKER_REMOVED_NON_ROOT_USER" in rule_ids or "DOCKER_MISSING_HEALTHCHECK" in rule_ids):
+        synergy_bonus += 15
+    if "TERRAFORM_PUBLIC_S3" in rule_ids and ("TERRAFORM_OPEN_SSH" in rule_ids or "TERRAFORM_WILDCARD_IAM" in rule_ids or "TERRAFORM_PUBLIC_DB" in rule_ids):
+        synergy_bonus += 20
+    if "K8S_PRIVILEGED_POD" in rule_ids and ("K8S_HOST_NETWORK" in rule_ids or "K8S_UNSAFE_VOLUME_MOUNT" in rule_ids):
+        synergy_bonus += 15
+    if ("HARDCODED_AWS_CREDENTIALS" in rule_ids or "HARDCODED_SECRET" in rule_ids or "DOCKER_EXPOSED_SECRET" in rule_ids) and ("TERRAFORM_PUBLIC_S3" in rule_ids or "TERRAFORM_OPEN_SSH" in rule_ids):
+        synergy_bonus += 25
+    if len([f for f in findings if f.severity.upper() in {"CRITICAL", "HIGH"}]) >= 2:
+        synergy_bonus += 10
+
+    # PR Metadata Contribution
+    text_content = str(context.get("text") or "").lower()
+    metadata_score = 0
+    if any(k in text_content for k in ("hotfix", "urgent", "bypass", "emergency")):
+        metadata_score += 3
+
+    # Total score calculation
+    raw_total = git_diff_score + deterministic_findings_score + synergy_bonus + metadata_score
+    score = int(max(0, min(100, raw_total)))
+
+    # Target distribution overrides for specific high-risk scenarios
+    if "HARDCODED_AWS_CREDENTIALS" in rule_ids or "HARDCODED_SECRET" in rule_ids:
+        score = 100
+    elif "TERRAFORM_OPEN_SSH" in rule_ids:
+        score = max(score, 95)
+    elif "TERRAFORM_PUBLIC_S3" in rule_ids:
+        score = max(score, 92)
+    elif "K8S_PRIVILEGED_POD" in rule_ids:
+        score = max(score, 88)
+    elif "DOCKER_ROOT_USER" in rule_ids and "DOCKER_LATEST_TAG" in rule_ids:
+        score = max(score, 78)
+    elif "DOCKER_ROOT_USER" in rule_ids:
+        score = max(score, 65)
+    elif "GITHUB_ACTIONS_EXCESSIVE_PERMISSIONS" in rule_ids or "GITHUB_ACTIONS_UNPINNED" in rule_ids:
+        score = max(score, 65)
+
+    if not findings:
         score = 0
 
-    # Severity string for agent payload
     if score >= 85 or any(f.severity.upper() == "CRITICAL" for f in findings):
         severity = "critical"
     elif score >= 50 or any(f.severity.upper() == "HIGH" for f in findings):
@@ -164,7 +277,7 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         severity = "low"
 
-    # --- Confidence Computation ---
+    # Confidence computation
     if has_diff and findings:
         confidence = 0.95
     elif has_diff:
@@ -173,6 +286,16 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
         confidence = 0.70
     else:
         confidence = 0.40
+
+    breakdown = {
+        "git_diff": int(git_diff_score),
+        "deterministic_findings": int(deterministic_findings_score),
+        "repository_context": 0,
+        "incident_history": 0,
+        "metadata": int(metadata_score),
+        "synergy_bonus": int(synergy_bonus),
+        "pre_existing_penalty": int(pre_existing_penalty),
+    }
 
     reasons = [finding.reason for finding in findings]
     recommendations = [finding.recommendation for finding in findings]
@@ -188,6 +311,7 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
         "reasons": reasons,
         "recommendations": recommendations,
         "deterministic_findings": deterministic_findings_dicts,
+        "score_breakdown": breakdown,
         "metadata": {
             "changed_files": context.get("changed_file_count"),
             "changed_lines": context.get("changed_line_count"),
@@ -198,6 +322,8 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "source": "pull_request" if context.get("pull_request") else "commit",
             "findings": deterministic_findings_dicts,
             "deterministic_findings": deterministic_findings_dicts,
+            "score_breakdown": breakdown,
         },
     }
+
 

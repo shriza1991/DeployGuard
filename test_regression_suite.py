@@ -33,7 +33,7 @@ make_decision = decision_engine_mod.make_decision
 
 
 def test_scenario_readme_only():
-    """Scenario 1: README/docs-only change -> Expected: SAFE"""
+    """Scenario 1: README/docs-only change -> Expected: SAFE (Score 5-10)"""
     payload = {
         "repository": {"name": "myorg/docs-repo"},
         "pull_request": {
@@ -61,11 +61,12 @@ def test_scenario_readme_only():
     decision = make_decision("test-readme-corr-id", agent_results)
 
     assert decision["decision"] == "SAFE", f"Expected SAFE for README only, got {decision['decision']}"
-    assert decision["overall_score"] < 30, f"Expected low score, got {decision['overall_score']}"
+    assert 5 <= decision["overall_score"] <= 10, f"Expected score 5-10 for README only, got {decision['overall_score']}"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_dependency_update():
-    """Scenario 2: Dependency update -> Expected: SAFE"""
+    """Scenario 2: Dependency update -> Expected: SAFE (Score 10-20)"""
     payload = {
         "repository": {"name": "myorg/app"},
         "pull_request": {
@@ -92,10 +93,12 @@ def test_scenario_dependency_update():
     decision = make_decision("test-dep-corr-id", agent_results)
 
     assert decision["decision"] == "SAFE", f"Expected SAFE for dependency update, got {decision['decision']}"
+    assert 5 <= decision["overall_score"] <= 20, f"Expected score 10-20 for dep update, got {decision['overall_score']}"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_user_root():
-    """Scenario 3: Dockerfile USER root -> Expected: REVIEW"""
+    """Scenario 3: Dockerfile USER root -> Expected: REVIEW (Score 60-75)"""
     payload = {
         "repository": {"name": "myorg/api"},
         "pull_request": {
@@ -122,11 +125,13 @@ def test_scenario_user_root():
     decision = make_decision("test-user-root-corr-id", agent_results)
 
     assert decision["decision"] == "REVIEW", f"Expected REVIEW for USER root, got {decision['decision']}"
+    assert 60 <= decision["overall_score"] <= 75, f"Expected score 60-75 for USER root, got {decision['overall_score']}"
     assert any(f.get("rule_id") == "DOCKER_ROOT_USER" for f in decision["deterministic_findings"]), "DOCKER_ROOT_USER rule missing"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_user_root_plus_latest():
-    """Scenario 4: USER root + FROM latest tag -> Expected: REVIEW (High score)"""
+    """Scenario 4: USER root + FROM latest tag -> Expected: REVIEW (Score 75-90)"""
     payload = {
         "repository": {"name": "myorg/api"},
         "pull_request": {
@@ -153,11 +158,12 @@ def test_scenario_user_root_plus_latest():
     decision = make_decision("test-root-latest-corr-id", agent_results)
 
     assert decision["decision"] == "REVIEW", f"Expected REVIEW for USER root + latest, got {decision['decision']}"
-    assert decision["overall_score"] >= 45, f"Expected higher score >= 45, got {decision['overall_score']}"
+    assert 75 <= decision["overall_score"] <= 90, f"Expected score 75-90 for USER root + latest, got {decision['overall_score']}"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_privileged_kubernetes():
-    """Scenario 5: Privileged Kubernetes pod -> Expected: BLOCK"""
+    """Scenario 5: Privileged Kubernetes pod -> Expected: BLOCK (Score 80-100)"""
     payload = {
         "repository": {"name": "myorg/k8s-manifests"},
         "pull_request": {
@@ -184,11 +190,13 @@ def test_scenario_privileged_kubernetes():
     decision = make_decision("test-k8s-priv-corr-id", agent_results)
 
     assert decision["decision"] == "BLOCK", f"Expected BLOCK for privileged k8s pod, got {decision['decision']}"
+    assert 80 <= decision["overall_score"] <= 100, f"Expected score 80-100 for Privileged K8s, got {decision['overall_score']}"
     assert any(f.get("rule_id") == "K8S_PRIVILEGED_POD" for f in decision["deterministic_findings"]), "K8S_PRIVILEGED_POD rule missing"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_open_ssh_ingress():
-    """Scenario 6: Open SSH (0.0.0.0/0) -> Expected: BLOCK"""
+    """Scenario 6: Open SSH (0.0.0.0/0) -> Expected: BLOCK (Score 90-100)"""
     payload = {
         "repository": {"name": "myorg/terraform"},
         "pull_request": {
@@ -215,11 +223,13 @@ def test_scenario_open_ssh_ingress():
     decision = make_decision("test-ssh-corr-id", agent_results)
 
     assert decision["decision"] == "BLOCK", f"Expected BLOCK for 0.0.0.0/0 SSH, got {decision['decision']}"
+    assert 90 <= decision["overall_score"] <= 100, f"Expected score 90-100 for Open SSH, got {decision['overall_score']}"
     assert any(f.get("rule_id") == "TERRAFORM_OPEN_SSH" for f in decision["deterministic_findings"]), "TERRAFORM_OPEN_SSH rule missing"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_public_s3_bucket():
-    """Scenario 7: Public S3 Bucket -> Expected: BLOCK"""
+    """Scenario 7: Public S3 Bucket -> Expected: BLOCK (Score 90-100)"""
     payload = {
         "repository": {"name": "myorg/terraform"},
         "pull_request": {
@@ -246,11 +256,13 @@ def test_scenario_public_s3_bucket():
     decision = make_decision("test-s3-corr-id", agent_results)
 
     assert decision["decision"] == "BLOCK", f"Expected BLOCK for public S3 bucket, got {decision['decision']}"
+    assert 90 <= decision["overall_score"] <= 100, f"Expected score 90-100 for Public S3, got {decision['overall_score']}"
     assert any(f.get("rule_id") == "TERRAFORM_PUBLIC_S3" for f in decision["deterministic_findings"]), "TERRAFORM_PUBLIC_S3 rule missing"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_aws_secret_key():
-    """Scenario 8: Hardcoded AWS Secret -> Expected: BLOCK"""
+    """Scenario 8: Hardcoded AWS Secret -> Expected: BLOCK (Score 100)"""
     payload = {
         "repository": {"name": "myorg/backend"},
         "pull_request": {
@@ -277,11 +289,13 @@ def test_scenario_aws_secret_key():
     decision = make_decision("test-secret-corr-id", agent_results)
 
     assert decision["decision"] == "BLOCK", f"Expected BLOCK for AWS secret, got {decision['decision']}"
+    assert decision["overall_score"] == 100, f"Expected score 100 for AWS Secret, got {decision['overall_score']}"
     assert any(f.get("rule_id") == "HARDCODED_AWS_CREDENTIALS" for f in decision["deterministic_findings"]), "HARDCODED_AWS_CREDENTIALS rule missing"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
 
 
 def test_scenario_remove_auth_middleware():
-    """Scenario 9: Remove authentication middleware -> Expected: REVIEW / BLOCK"""
+    """Scenario 9: Remove authentication middleware -> Expected: REVIEW / BLOCK (Score 80-100)"""
     payload = {
         "repository": {"name": "myorg/api"},
         "pull_request": {
@@ -308,8 +322,44 @@ def test_scenario_remove_auth_middleware():
     decision = make_decision("test-auth-remove-corr-id", agent_results)
 
     assert decision["decision"] in {"REVIEW", "BLOCK"}, f"Expected REVIEW or BLOCK for auth removal, got {decision['decision']}"
+    assert 80 <= decision["overall_score"] <= 100, f"Expected score 80-100 for Auth Removal, got {decision['overall_score']}"
     assert any(f.get("rule_id") == "REMOVED_AUTH_MIDDLEWARE" for f in decision["deterministic_findings"]), "REMOVED_AUTH_MIDDLEWARE rule missing"
+    assert "score_breakdown" in decision, "score_breakdown missing from decision output"
+
+
+def test_technology_agnostic_isolation():
+    """Scenario 10: Pure Python repo change (no Docker/Terraform/K8s) -> Expected: SAFE, 0 infra findings"""
+    payload = {
+        "repository": {"name": "myorg/pure-python-lib"},
+        "pull_request": {
+            "title": "refactor: optimize string manipulation helper",
+            "body": "Improves performance of string formatting utility.",
+        },
+        "changed_files": [
+            {
+                "filename": "utils.py",
+                "patch": "+ def format_string(s: str) -> str:\n+     return s.strip().lower()",
+            }
+        ],
+    }
+
+    code_res = code_risk_analyzer(payload)
+    infra_res = infra_risk_analyzer(payload)
+
+    agent_results = {
+        "code-risk": code_res,
+        "infra-risk": infra_res,
+        "incident-history": {"score": 10, "severity": "low", "confidence": 0.5},
+    }
+
+    decision = make_decision("test-agnostic-corr-id", agent_results)
+
+    assert decision["decision"] == "SAFE", f"Expected SAFE for pure python lib, got {decision['decision']}"
+    assert decision["overall_score"] <= 15, f"Expected low score <= 15, got {decision['overall_score']}"
+    assert len(infra_res.get("deterministic_findings", [])) == 0, f"Expected 0 infra findings for non-infra repo, got {len(infra_res.get('deterministic_findings', []))}"
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+

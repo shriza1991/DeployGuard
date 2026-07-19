@@ -26,7 +26,7 @@ class LLMReasoner:
         prompt = build_prompt(
             score=int(deterministic_result.get("score", 0)),
             severity=str(deterministic_result.get("severity", "low")),
-            confidence=int(deterministic_result.get("confidence", 0)),
+            confidence=float(deterministic_result.get("confidence", 0.0)),
             reasons=list(deterministic_result.get("reasons", [])) or [],
             recommendations=list(deterministic_result.get("recommendations", [])) or [],
             changed_files=_extract_changed_files(payload),

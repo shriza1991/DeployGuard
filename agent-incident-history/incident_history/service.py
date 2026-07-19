@@ -109,6 +109,17 @@ class IncidentHistoryService:
         deterministic["metadata"]["total_latency_ms"] = total_latency_ms
         logger.info("Incident history processing completed latency=%sms", total_latency_ms)
 
+        breakdown = {
+            "git_diff": 0,
+            "deterministic_findings": 0,
+            "repository_context": 0,
+            "incident_history": deterministic["score"],
+            "metadata": 0,
+            "synergy_bonus": 0,
+            "pre_existing_penalty": 0,
+        }
+        deterministic["metadata"]["score_breakdown"] = breakdown
+
         return {
             "agent": "incident-history",
             "correlation_id": correlation_id,
@@ -120,6 +131,7 @@ class IncidentHistoryService:
                 deterministic["recommendations"],
                 llm_result.recommendations,
             ),
+            "score_breakdown": breakdown,
             "metadata": deterministic["metadata"],
             "similar_incidents": [incident.output() for incident in incidents],
             "llm": llm_result.output(),
@@ -165,6 +177,16 @@ class IncidentHistoryService:
         recommendation: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
+        breakdown = {
+            "git_diff": 0,
+            "deterministic_findings": 0,
+            "repository_context": 0,
+            "incident_history": 10,
+            "metadata": 0,
+            "synergy_bonus": 0,
+            "pre_existing_penalty": 0,
+        }
+        metadata["score_breakdown"] = breakdown
         return {
             "agent": "incident-history",
             "correlation_id": correlation_id,
@@ -173,6 +195,7 @@ class IncidentHistoryService:
             "confidence": 0.1,
             "reasons": [reason, "No historical incidents available."],
             "recommendations": [recommendation],
+            "score_breakdown": breakdown,
             "metadata": metadata,
             "similar_incidents": [],
             "llm": {

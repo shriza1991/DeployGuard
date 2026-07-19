@@ -33,5 +33,6 @@
   "test_regression_suite.py::test_scenario_readme_only",
   "test_regression_suite.py::test_scenario_remove_auth_middleware",
   "test_regression_suite.py::test_scenario_user_root",
-  "test_regression_suite.py::test_scenario_user_root_plus_latest"
+  "test_regression_suite.py::test_scenario_user_root_plus_latest",
+  "test_regression_suite.py::test_technology_agnostic_isolation"
 ]

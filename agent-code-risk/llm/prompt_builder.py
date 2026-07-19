@@ -132,12 +132,31 @@ def generate_repo_context_summary(evidence_list: list[Any]) -> str:
     
     return "\n".join(lines)
 
-PROMPT_TEMPLATE_ORIGINAL = """You are reviewing a deployment risk assessment for a code change.
 
-Deterministic analysis summary:
-- score: {score}
-- severity: {severity}
-- confidence: {confidence}
+# ---------------------------------------------------------------------------
+# Prompt templates
+# ---------------------------------------------------------------------------
+# Evidence ordering strictly enforces: Diff > Repo Context > Deterministic
+# Findings > PR Metadata. Metadata (title/body/commit) comes LAST so the LLM
+# never treats it as the primary risk signal.
+
+PROMPT_TEMPLATE_ORIGINAL = """You are a Staff DevSecOps Security Engineer performing a deployment gate review.
+Your job is to reason about blast radius, security impact, runtime behavior, and interaction between changes.
+You reason strictly from actual evidence and inferred project capabilities — never from generic assumptions.
+
+-------------------------------------------------
+Inferred Repository Capabilities: {capabilities}
+(Do NOT assume any unlisted infrastructure, containers, or CI/CD tooling. Evaluate risk strictly within present capabilities.)
+
+-------------------------------------------------
+Git Diff (primary evidence)
+{changed_files}
+
+-------------------------------------------------
+Deterministic Security Findings
+Score  : {score}
+Severity: {severity}
+Confidence: {confidence:.2f}
 
 Findings:
 {findings}
@@ -145,15 +164,26 @@ Findings:
 Recommendations:
 {recommendations}
 
-Changed files:
-{changed_files}
-
-Metadata:
+-------------------------------------------------
+PR Metadata (supporting evidence only — never the primary trigger)
 {metadata}
 
-Your job is to enrich the deterministic assessment with additional explanation, risk reasoning, and practical recommendations.
-Do not replace or overwrite the deterministic score, severity, confidence, reasons, or recommendations.
-Do not use any data beyond the deterministic analyzer output and changed-file context.
+-------------------------------------------------
+Task
+Enrich the deterministic assessment with additional explanation, blast-radius analysis, and practical recommendations.
+Think like a Staff DevSecOps Engineer:
+  - WHAT specifically changed in the diff?
+  - WHY does it create deployment risk?
+  - WHICH systems, services, or security boundaries are affected?
+  - HOW severe is the potential blast radius?
+
+Rules:
+  - Base your reasoning on the diff and deterministic findings above.
+  - Do NOT assume the presence of unmentioned infrastructure.
+  - Do NOT trigger risk from PR title/description alone.
+  - Do NOT invent findings absent from the diff.
+  - If no risk is found, say so clearly and return a low confidence score.
+  - Calibrate confidence: HIGH if backed by diff evidence; LOW if metadata-only.
 
 IMPORTANT: Return ONLY a valid JSON object. No Markdown. No code fences. No explanations before or after the JSON.
 The response must start with {{ and end with }} and contain nothing else.
@@ -169,32 +199,28 @@ Required JSON shape:
 If a section is not applicable, return an empty string or empty array, but still return valid JSON.
 """
 
-PROMPT_TEMPLATE_EXTENDED = """You are reviewing a deployment risk assessment for a code change.
+PROMPT_TEMPLATE_EXTENDED = """You are a Staff DevSecOps Security Engineer performing a deployment gate review.
+Your job is to reason about blast radius, security impact, runtime behavior, and interaction between changes.
+You reason strictly from actual evidence and inferred project capabilities — never from generic assumptions.
 
 -------------------------------------------------
-Repository Summary
-Repository: {repository}
-Branch: {branch}
+Repository: {repository}   Branch: {branch}
+Inferred Repository Capabilities: {capabilities}
+(Do NOT assume any unlisted infrastructure, containers, or CI/CD tooling. Evaluate risk strictly within present capabilities.)
 
 -------------------------------------------------
-Relevant Repository Evidence
-{relevant_evidence}
-
--------------------------------------------------
-Pull Request
-Title: {pr_title}
-Description: {pr_body}
-Commit Message: {commit_message}
-
-Changed Files:
+Git Diff (primary evidence — use this first)
 {changed_files}
 
 -------------------------------------------------
-Deterministic Findings
-Deterministic analysis summary:
-- score: {score}
-- severity: {severity}
-- confidence: {confidence}
+Repository Context (related code retrieved via semantic search)
+{relevant_evidence}
+
+-------------------------------------------------
+Deterministic Security Findings
+Score  : {score}
+Severity: {severity}
+Confidence: {confidence:.2f}
 
 Findings:
 {findings}
@@ -202,18 +228,33 @@ Findings:
 Recommendations:
 {recommendations}
 
-Metadata:
-{metadata}
+-------------------------------------------------
+PR Metadata (supporting context only — never the primary trigger for risk)
+Title      : {pr_title}
+Description: {pr_body}
+Commit     : {commit_message}
 
 -------------------------------------------------
 Task
-Analyze deployment risk.
-Use repository context only as supporting evidence.
-Do not invent information that is not present in the evidence.
-If repository context is unavailable, continue normally.
+Enrich the deterministic assessment with additional explanation, blast-radius analysis, and practical recommendations.
+Think like a Staff DevSecOps Engineer:
+  - WHAT specifically changed in the diff (cite file names, line content)?
+  - WHY does it create deployment risk (security boundary, data exposure, privilege escalation)?
+  - WHICH downstream systems, services, or security boundaries are affected?
+  - HOW severe is the potential blast radius?
+  - DOES the repository context show that related components depend on what changed?
 
-Your job is to enrich the deterministic assessment with additional explanation, risk reasoning, and practical recommendations.
-Do not replace or overwrite the deterministic score, severity, confidence, reasons, or recommendations.
+Rules:
+  - Base your reasoning on the diff and deterministic findings first.
+  - Use repository context only as supporting evidence for downstream impact.
+  - Do NOT trigger risk from PR title or description alone.
+  - Do NOT invent findings absent from the diff.
+  - If no risk is found, say so clearly.
+  - Confidence calibration:
+      >= 0.90 → finding backed by explicit diff evidence + deterministic rule
+      0.70-0.89 → finding backed by diff but no deterministic rule
+      0.50-0.69 → finding inferred from context, no diff line match
+      < 0.50 → metadata-only, no diff or context evidence
 
 IMPORTANT: Return ONLY a valid JSON object. No Markdown. No code fences. No explanations before or after the JSON.
 The response must start with {{ and end with }} and contain nothing else.
@@ -233,7 +274,7 @@ If a section is not applicable, return an empty string or empty array, but still
 def build_prompt(
     score: Any = None,
     severity: str = "low",
-    confidence: int = 0,
+    confidence: float = 0.0,
     reasons: list[str] = None,
     recommendations: list[str] = None,
     changed_files: list[dict[str, Any]] = None,
@@ -248,7 +289,7 @@ def build_prompt(
         context: AssembledContext = score
         score_val = context.score
         severity_val = context.severity
-        confidence_val = context.confidence
+        confidence_val = float(context.confidence)
         reasons_val = context.reasons
         recommendations_val = context.recommendations
         changed_files_val = context.changed_files
@@ -263,7 +304,7 @@ def build_prompt(
     else:
         score_val = score if score is not None else 0
         severity_val = severity
-        confidence_val = confidence
+        confidence_val = float(confidence) if confidence else 0.0
         reasons_val = reasons or []
         recommendations_val = recommendations or []
         changed_files_val = changed_files or []
@@ -280,14 +321,21 @@ def build_prompt(
     findings_text = "\n".join(f"- {reason}" for reason in reasons_val) or "- none"
     recommendations_text = "\n".join(f"- {item}" for item in recommendations_val) or "- none"
 
+    # Build diff section: file path header + patch content, truncated to 1500 chars per file
     changed_files_text = []
-    for file_entry in changed_files_val[:10]:
+    for file_entry in (changed_files_val or [])[:10]:
         filename = file_entry.get("filename", "unknown")
         patch = file_entry.get("patch", "<no diff>")
-        changed_files_text.append(f"* {filename}: {patch[:1000].strip()}")
+        if patch and patch != "<no diff>":
+            changed_files_text.append(f"--- {filename} ---\n{patch[:1500].strip()}")
+        else:
+            changed_files_text.append(f"--- {filename} --- (no patch available)")
 
-    changed_files_text = "\n".join(changed_files_text) or "- none"
+    changed_files_text_str = "\n\n".join(changed_files_text) or "- none"
     metadata_text = json.dumps(metadata_val, indent=2, sort_keys=True)
+
+    inferred_caps = metadata_val.get("inferred_capabilities") or ["general_code"]
+    capabilities_str = ", ".join(inferred_caps)
 
     # 3. Format evidence list if available, or fall back to original template
     if evidence_list:
@@ -297,7 +345,8 @@ def build_prompt(
         for ev in evidence_list:
             meta = ev.metadata
             ev_file = meta.get("file_path") or "unknown"
-            score_val_str = f"{meta.get('score'):.3f}" if meta.get('score') is not None else "N/A"
+            ev_score = meta.get("score")
+            score_val_str = f"{ev_score:.3f}" if ev_score is not None else "N/A"
             reason_matched = meta.get("retrieval_reason") or "Semantic similarity lookup"
 
             block = (
@@ -318,6 +367,7 @@ def build_prompt(
         return PROMPT_TEMPLATE_EXTENDED.format(
             repository=repository,
             branch=branch,
+            capabilities=capabilities_str,
             relevant_evidence=relevant_evidence_text,
             pr_title=pr_title or "unknown",
             pr_body=pr_body or "unknown",
@@ -327,16 +377,16 @@ def build_prompt(
             confidence=confidence_val,
             findings=findings_text,
             recommendations=recommendations_text,
-            changed_files=changed_files_text,
-            metadata=metadata_text,
+            changed_files=changed_files_text_str,
         )
     else:
         return PROMPT_TEMPLATE_ORIGINAL.format(
+            capabilities=capabilities_str,
             score=score_val,
             severity=severity_val,
             confidence=confidence_val,
             findings=findings_text,
             recommendations=recommendations_text,
-            changed_files=changed_files_text,
+            changed_files=changed_files_text_str,
             metadata=metadata_text,
         )

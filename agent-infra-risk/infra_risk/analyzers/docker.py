@@ -133,10 +133,14 @@ class DockerAnalyzer(TextAnalyzer):
 
     def analyze(self, text: str, file_path: str = "Dockerfile") -> list[Finding]:
         findings = super().analyze(text, file_path=file_path)
-        mentions_docker = any(token in text.lower() for token in ("docker", "dockerfile", "container", "from "))
+        is_docker_file = (
+            "dockerfile" in file_path.lower()
+            or "docker-compose" in file_path.lower()
+            or bool(re.search(r"(?m)^\s*from\s+[a-zA-Z0-9._\-/:]+", text, re.IGNORECASE))
+        )
         has_user_instruction = bool(self._has_user_instruction(text))
         
-        if mentions_docker and not has_user_instruction:
+        if is_docker_file and not has_user_instruction:
             findings.append(
                 Finding(
                     severity="HIGH",
@@ -151,7 +155,7 @@ class DockerAnalyzer(TextAnalyzer):
                     evidence={"file": file_path, "matched": "missing USER"},
                 )
             )
-        if mentions_docker and "healthcheck" not in text.lower():
+        if is_docker_file and "healthcheck" not in text.lower():
             findings.append(
                 Finding(
                     severity="LOW",
