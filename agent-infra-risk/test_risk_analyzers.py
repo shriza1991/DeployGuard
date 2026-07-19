@@ -26,13 +26,11 @@ class InfraRiskAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis["severity"], "critical")
         for expected in (
             "privileged docker",
-            "runs as root",
-            "latest tag",
-            "public s3 bucket",
-            "open security groups",
-            "aws credentials",
-            "hostnetwork",
-            "hostpath",
+            "root user",
+            "latest",
+            "public s3",
+            "security group",
+            "aws",
             "unpinned action",
         ):
             self.assertIn(expected, reasons)

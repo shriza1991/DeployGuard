@@ -63,10 +63,11 @@ def make_decision(correlation_id: str, agent_results: Dict[str, Dict[str, Any]])
                 "confidence": llm_data.get("confidence", 0.0),
             })
 
-    # 3. Calculate weighted overall score, confidence, and aggregated score_breakdown
-    weighted_sum = 0.0
+    # 3. Calculate weighted overall score, weighted confidence, and aggregated score_breakdown
+    weighted_score_sum = 0.0
+    weighted_conf_sum = 0.0
     weight_sum = 0.0
-    confidences = []
+    all_confidence_factors: List[str] = []
     
     aggregated_breakdown = {
         "git_diff": 0,
@@ -80,22 +81,41 @@ def make_decision(correlation_id: str, agent_results: Dict[str, Dict[str, Any]])
 
     for agent_name, result in agent_results.items():
         if isinstance(result, dict):
-            if agent_name in WEIGHTS:
-                score = result.get("score", 0)
-                weight = WEIGHTS[agent_name]
-                weighted_sum += score * weight
-                weight_sum += weight
-                
-                conf = result.get("confidence", 0.0)
-                confidences.append(conf)
+            agent_weight = WEIGHTS.get(agent_name, 0.0)
+            score = result.get("score", 0)
+            conf = result.get("confidence")
+            if conf is None:
+                conf = result.get("metadata", {}).get("confidence")
+
+            if conf is not None and isinstance(conf, (int, float)):
+                conf_val = float(conf)
+                if conf_val > 1.0:
+                    conf_val = conf_val / 100.0
+                conf_val = max(0.0, min(1.0, conf_val))
+            else:
+                conf_val = 0.0
+
+            if agent_weight > 0:
+                weighted_score_sum += score * agent_weight
+                weighted_conf_sum += conf_val * agent_weight
+                weight_sum += agent_weight
+
+            factors = (
+                result.get("confidence_factors")
+                or result.get("metadata", {}).get("confidence_factors")
+                or []
+            )
+            if isinstance(factors, list):
+                all_confidence_factors.extend([str(f) for f in factors if f])
 
             bd = result.get("score_breakdown") or result.get("metadata", {}).get("score_breakdown") or {}
             for key in aggregated_breakdown:
                 if key in bd:
                     aggregated_breakdown[key] = max(aggregated_breakdown[key], int(bd.get(key, 0)))
 
-    overall_score = round(weighted_sum / weight_sum) if weight_sum > 0 else 0
-    overall_confidence = round(sum(confidences) / len(confidences), 2) if confidences else 0.0
+    overall_score = round(weighted_score_sum / weight_sum) if weight_sum > 0 else 0
+    overall_confidence = round(weighted_conf_sum / weight_sum, 2) if weight_sum > 0 else 0.0
+    confidence_factors = deduplicate_list(all_confidence_factors)
 
     max_agent_score = max((result.get("score", 0) for result in agent_results.values() if isinstance(result, dict)), default=0)
     overall_score = max(overall_score, max_agent_score)
@@ -196,6 +216,7 @@ def make_decision(correlation_id: str, agent_results: Dict[str, Dict[str, Any]])
         "correlation_id": correlation_id,
         "overall_score": overall_score,
         "overall_confidence": overall_confidence,
+        "confidence_factors": confidence_factors,
         "decision": decision,
         "severity": severity,
         "score_breakdown": aggregated_breakdown,

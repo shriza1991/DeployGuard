@@ -24,7 +24,8 @@ import {
   User,
   Hash,
 } from 'lucide-react';
-import './Deployments.css';
+import { ConfidenceDisplay } from '../components/ConfidenceDisplay';
+import { normalizeConfidence } from '../utils/confidence';
 
 const AGENT_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
   'code-risk': {
@@ -327,18 +328,20 @@ export const DeploymentDetails: React.FC = () => {
           </div>
 
           {/* Score + Confidence chips */}
-          <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
-            <div style={{ padding: '10px 18px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px', textAlign: 'center' }}>
+          <div style={{ display: 'flex', gap: '12px', flexShrink: 0, alignItems: 'stretch' }}>
+            <div style={{ padding: '10px 18px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '8px', textAlign: 'center', minWidth: '110px' }}>
               <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Risk Score</div>
-              <div className="font-mono" style={{ fontSize: '22px', color: decisionColor, fontWeight: 700, marginTop: '2px' }}>
+              <div className="font-mono" style={{ fontSize: '22px', color: decisionColor, fontWeight: 700, marginTop: '4px' }}>
                 {deployment.overall_score ?? '—'}
               </div>
             </div>
-            <div style={{ padding: '10px 18px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px', textAlign: 'center' }}>
-              <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Confidence</div>
-              <div className="font-mono" style={{ fontSize: '22px', color: 'var(--color-safe)', fontWeight: 700, marginTop: '2px' }}>
-                {deployment.overall_confidence !== undefined ? `${Math.round(deployment.overall_confidence * 100)}%` : '—'}
-              </div>
+            <div style={{ minWidth: '240px' }}>
+              <ConfidenceDisplay
+                value={deployment.overall_confidence}
+                factors={(deployment as any).confidence_factors}
+                title="Analysis Confidence"
+                showBreakdown={true}
+              />
             </div>
           </div>
         </div>
@@ -420,7 +423,8 @@ export const DeploymentDetails: React.FC = () => {
           const isExpanded = expandedAgents[key] !== false; // default open
           const score = data.score ?? 0;
           const severity = data.severity ?? 'low';
-          const confidence = Math.round((data.confidence ?? 0.9) * 100);
+          const agentConfidencePct = normalizeConfidence(data.confidence) ?? 90;
+          const agentFactors: string[] = data.confidence_factors || data.metadata?.confidence_factors || [];
           const reasons: string[] = data.reasons ?? [];
           const recommendations: string[] = data.recommendations ?? [];
           const similarIncidents: any[] = data.similar_incidents ?? [];
@@ -454,13 +458,22 @@ export const DeploymentDetails: React.FC = () => {
               {/* Agent body */}
               {isExpanded && (
                 <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {/* Score bar + confidence */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>RISK SCORE</span>
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>CONFIDENCE: {confidence}%</span>
+                  {/* Score bar + confidence display */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>RISK SCORE</span>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{score}/100</span>
+                      </div>
+                      <ScoreBar score={score} />
                     </div>
-                    <ScoreBar score={score} />
+
+                    <ConfidenceDisplay
+                      value={data.confidence}
+                      factors={agentFactors}
+                      title="Analysis Confidence"
+                      showBreakdown={true}
+                    />
                   </div>
 
                   {/* Reasons */}

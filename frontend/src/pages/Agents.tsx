@@ -4,6 +4,7 @@ import { getAgentStatus, listDeployments } from '../api/dashboard';
 import { Bot, Terminal, Cpu } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
 import { AgentStat } from '../components/AgentStat';
+import { normalizeConfidence } from '../utils/confidence';
 import './Dashboard.css';
 
 const MOCK_AGENT_LOGS: Record<string, string[]> = {
@@ -59,10 +60,10 @@ export const Agents: React.FC = () => {
 
   // Compute live confidence mean
   const confidences = deployments
-    .map(d => d.overall_confidence)
-    .filter(c => c !== undefined && c !== null) as number[];
+    .map(d => normalizeConfidence(d.overall_confidence))
+    .filter(c => c !== null) as number[];
   const liveAvgConfidence = confidences.length > 0
-    ? `${Math.round((confidences.reduce((sum, val) => sum + val, 0) / confidences.length) * 100)}%`
+    ? `${Math.round(confidences.reduce((sum, val) => sum + val, 0) / confidences.length)}%`
     : '--';
 
   // Compute relative time of last analysis run
@@ -172,7 +173,7 @@ export const Agents: React.FC = () => {
                       <AgentStat label="Last Run" value={agent.last_run_timestamp ? formatRelativeTime(agent.last_run_timestamp) : '--'} />
                       <AgentStat label="Average Latency" value={agent.latency_ms !== undefined && agent.latency_ms !== null && agent.latency_ms > 0 ? `${Math.round(agent.latency_ms)} ms` : '--'} />
                       <AgentStat label="Analysis Count" value={agent.analysis_count !== undefined && agent.analysis_count !== null ? agent.analysis_count.toLocaleString() : '--'} />
-                      <AgentStat label="Average Confidence" value={agent.average_confidence !== undefined && agent.average_confidence !== null && agent.average_confidence > 0 ? `${Math.round(agent.average_confidence * 100)}%` : '--'} />
+                      <AgentStat label="Average Confidence" value={normalizeConfidence(agent.average_confidence) !== null ? `${normalizeConfidence(agent.average_confidence)}%` : '--'} />
                       
                       {/* Hardware / Environment */}
                       <AgentStat label="Version" value={agent.version || '--'} />

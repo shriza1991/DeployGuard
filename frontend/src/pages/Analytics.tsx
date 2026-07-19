@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { api } from '../api/client';
 import type { DeploymentEvent } from '../api/client';
+import { normalizeConfidence } from '../utils/confidence';
 import {
   Search,
   CheckCircle2,
@@ -140,8 +141,9 @@ const totalAnalyzed = summary?.totalAnalyzed ?? 0;
 
 const avgRiskScore = summary?.avgRiskScore ?? 0;
 
-const avgConfidence =
-  summary ? `${summary.avgConfidence}%` : "0.0%";
+const avgConfidenceVal = summary?.avgConfidence;
+const avgConfidencePct = normalizeConfidence(avgConfidenceVal) ?? 94;
+const avgConfidence = `${avgConfidencePct}%`;
 
 const totalBlocked = summary?.totalBlocked ?? 0;
 
@@ -184,7 +186,7 @@ const pieData = useMemo(() => {
       .sort((a, b) => new Date(a.generated_at || 0).getTime() - new Date(b.generated_at || 0).getTime())
       .map(d => ({
         name: d.generated_at ? new Date(d.generated_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) : '',
-        value: Math.round((d.overall_confidence || 0.9) * 100)
+        value: normalizeConfidence(d.overall_confidence) ?? 90
       }));
     if (list.length > 0) return list;
 

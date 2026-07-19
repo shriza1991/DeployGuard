@@ -278,10 +278,20 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
         severity = "low"
 
     # Confidence computation
+    confidence_factors = []
+    if has_diff:
+        confidence_factors.append("Infrastructure diff evaluated")
+    if context.get("pull_request") or context.get("head_commit"):
+        confidence_factors.append("PR metadata available")
+    if findings:
+        confidence_factors.append("IaC security rules evaluated")
+    else:
+        confidence_factors.append("No infrastructure misconfigurations detected")
+
     if has_diff and findings:
         confidence = 0.95
     elif has_diff:
-        confidence = 0.88
+        confidence = 0.92
     elif findings:
         confidence = 0.70
     else:
@@ -308,6 +318,7 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
         "score": int(score),
         "severity": severity,
         "confidence": float(confidence),
+        "confidence_factors": confidence_factors,
         "reasons": reasons,
         "recommendations": recommendations,
         "deterministic_findings": deterministic_findings_dicts,
@@ -323,6 +334,7 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "findings": deterministic_findings_dicts,
             "deterministic_findings": deterministic_findings_dicts,
             "score_breakdown": breakdown,
+            "confidence_factors": confidence_factors,
         },
     }
 

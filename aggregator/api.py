@@ -191,6 +191,7 @@ def list_deployments(
             "decision": d.get("decision"),
             "overall_score": d.get("overall_score"),
             "overall_confidence": d.get("overall_confidence"),
+            "confidence_factors": d.get("confidence_factors", []),
             "severity": d.get("severity"),
             "generated_at": d.get("generated_at"),
             "status": "complete",

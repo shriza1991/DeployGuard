@@ -14,6 +14,7 @@ import {
   Terminal,
   RefreshCw,
 } from 'lucide-react';
+import { ConfidenceDisplay } from '../components/ConfidenceDisplay';
 import './Deployments.css';
 
 export const Deployments: React.FC = () => {
@@ -254,7 +255,7 @@ export const Deployments: React.FC = () => {
                   <th style={{ padding: '16px' }}>Repository</th>
                   <th style={{ padding: '16px' }}>Decision</th>
                   <th style={{ padding: '16px' }}>Risk Score</th>
-                  <th style={{ padding: '16px' }}>Confidence</th>
+                  <th style={{ padding: '16px' }}>Analysis Confidence</th>
                   <th style={{ padding: '16px' }}>Branch</th>
                   <th style={{ padding: '16px' }}>Created Time</th>
                   <th style={{ padding: '16px', textAlign: 'right' }}>Actions</th>
@@ -279,7 +280,7 @@ export const Deployments: React.FC = () => {
                       </span>
                     </td>
                     <td style={{ padding: '16px' }}>
-                      {dep.overall_confidence !== undefined ? `${Math.round(dep.overall_confidence * 100)}%` : '-'}
+                      <ConfidenceDisplay value={dep.overall_confidence} compact={true} />
                     </td>
                     <td style={{ padding: '16px', color: 'var(--text-secondary)' }}>{dep.branch || '-'}</td>
                     <td style={{ padding: '16px', color: 'var(--text-muted)' }}>{formatDate(dep.generated_at)}</td>

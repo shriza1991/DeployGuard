@@ -9,6 +9,7 @@ import {
   type DeploymentSummary,
 } from '../api/dashboard';
 import { getRepositoryStatus, getRepositoryManifest, getRepositoryStats } from '../api/repository';
+import { normalizeConfidence, getConfidenceColor } from '../utils/confidence';
 import {
   Shield,
   Activity,
@@ -506,15 +507,21 @@ export const Dashboard: React.FC = () => {
                 progressColor={avgRisk >= 60 ? 'var(--color-block)' : avgRisk >= 30 ? 'var(--color-review)' : 'var(--color-safe)'}
               />
 
-              <MetricCard
-                title="AVG CONFIDENCE INDEX"
-                value={`${Math.round(avgConfidence * 100)}%`}
-                subtitle="Model validation average"
-                type="safe"
-                progress={avgConfidence * 100}
-                progressColor="var(--color-safe)"
-                valueStyle={{ color: 'var(--color-safe)' }}
-              />
+              {(() => {
+                const confPct = normalizeConfidence(avgConfidence) ?? 0;
+                const confColor = getConfidenceColor(confPct);
+                return (
+                  <MetricCard
+                    title="AVG CONFIDENCE INDEX"
+                    value={`${confPct}%`}
+                    subtitle="Model validation average"
+                    type="safe"
+                    progress={confPct}
+                    progressColor={confColor}
+                    valueStyle={{ color: confColor }}
+                  />
+                );
+              })()}
 
             </div>
           </div>

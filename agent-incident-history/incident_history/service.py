@@ -109,6 +109,11 @@ class IncidentHistoryService:
         deterministic["metadata"]["total_latency_ms"] = total_latency_ms
         logger.info("Incident history processing completed latency=%sms", total_latency_ms)
 
+        factors = list(deterministic.get("confidence_factors", []))
+        if llm_result and getattr(llm_result, "summary", None):
+            factors.append("Historical LLM synthesis completed")
+        factors = list(dict.fromkeys(factors))
+
         breakdown = {
             "git_diff": 0,
             "deterministic_findings": 0,
@@ -119,6 +124,7 @@ class IncidentHistoryService:
             "pre_existing_penalty": 0,
         }
         deterministic["metadata"]["score_breakdown"] = breakdown
+        deterministic["metadata"]["confidence_factors"] = factors
 
         return {
             "agent": "incident-history",
@@ -126,6 +132,7 @@ class IncidentHistoryService:
             "score": deterministic["score"],
             "severity": deterministic["severity"],
             "confidence": deterministic["confidence"],
+            "confidence_factors": factors,
             "reasons": deterministic["reasons"],
             "recommendations": _merge_recommendations(
                 deterministic["recommendations"],
@@ -147,13 +154,14 @@ class IncidentHistoryService:
     ) -> dict[str, Any]:
         score = _score_incidents(incidents, qdrant_available)
         severity = _severity(score)
-        confidence = _confidence(incidents, qdrant_available, embedding_quality)
+        confidence, factors = _confidence(incidents, qdrant_available, embedding_quality)
         reasons = _reasons(incidents, qdrant_available)
         recommendations = _recommendations(score, incidents, qdrant_available)
         return {
             "score": score,
             "severity": severity,
             "confidence": confidence,
+            "confidence_factors": factors,
             "reasons": reasons,
             "recommendations": recommendations,
             "metadata": {
@@ -167,6 +175,7 @@ class IncidentHistoryService:
                 "qdrant_collection": getattr(self.vector_store, "collection", ""),
                 "retrieval": retrieval_metadata,
                 "query_text": query_text[:2000],
+                "confidence_factors": factors,
             },
         }
 
@@ -187,12 +196,15 @@ class IncidentHistoryService:
             "pre_existing_penalty": 0,
         }
         metadata["score_breakdown"] = breakdown
+        factors = ["Historical incident analysis fallback active"]
+        metadata["confidence_factors"] = factors
         return {
             "agent": "incident-history",
             "correlation_id": correlation_id,
             "score": 10,
             "severity": "low",
             "confidence": 0.1,
+            "confidence_factors": factors,
             "reasons": [reason, "No historical incidents available."],
             "recommendations": [recommendation],
             "score_breakdown": breakdown,
@@ -260,18 +272,30 @@ def _score_incidents(incidents: list[SimilarIncident], qdrant_available: bool) -
     return 10
 
 
-def _confidence(incidents: list[SimilarIncident], qdrant_available: bool, embedding_quality: str) -> float:
+def _confidence(incidents: list[SimilarIncident], qdrant_available: bool, embedding_quality: str) -> tuple[float, list[str]]:
+    factors: list[str] = []
     if not qdrant_available or embedding_quality == "failed":
-        return 0.1
+        factors.append("Historical incident database offline or embedding failed")
+        return 0.1, factors
+
+    factors.append("Vector search executed successfully")
+    factors.append("Incident database connected")
+
     if not incidents:
-        return 0.35
+        factors.append("No historical incidents matched (clean record)")
+        return 0.92, factors
+
     top_similarity = max(item.similarity for item in incidents)
     metadata_quality = sum(
         1 for item in incidents
         if item.severity and item.environment and item.outcome and item.root_cause
     ) / max(1, len(incidents))
-    confidence = 0.35 + min(0.35, top_similarity * 0.35) + min(0.2, len(incidents) * 0.05) + (metadata_quality * 0.1)
-    return round(max(0.0, min(1.0, confidence)), 2)
+
+    factors.append(f"{len(incidents)} historical incident(s) evaluated")
+    factors.append(f"Top match similarity: {top_similarity:.2f}")
+
+    confidence = 0.50 + min(0.35, top_similarity * 0.35) + min(0.1, len(incidents) * 0.02) + (metadata_quality * 0.05)
+    return round(max(0.0, min(1.0, confidence)), 2), factors
 
 
 def _severity(score: int) -> str:

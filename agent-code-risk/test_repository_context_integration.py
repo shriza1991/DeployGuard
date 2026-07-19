@@ -174,17 +174,14 @@ class TestRepositoryContextIntegration(unittest.TestCase):
 
         prompt = build_prompt(context)
         
-        self.assertIn("Repository Summary", prompt)
-        self.assertIn("Relevant Repository Evidence", prompt)
         self.assertIn("Repository Context Summary", prompt)
         self.assertIn("Files involved:", prompt)
         self.assertIn("gateway/auth.py", prompt)
         self.assertIn("Related components:", prompt)
-        self.assertIn("File:\ngateway/auth.py", prompt)
-        self.assertIn("Summary:", prompt)
-        self.assertIn("Relevant Code:", prompt)
+        self.assertIn("File: gateway/auth.py", prompt)
+        self.assertIn("Matched chunk:", prompt)
         self.assertIn("class TokenHandler:", prompt)
-        self.assertIn("Pull Request", prompt)
+        self.assertIn("PR Metadata", prompt)
         self.assertIn("PR title", prompt)
         self.assertIn("PR desc", prompt)
         self.assertIn("commit msg", prompt)
@@ -202,13 +199,12 @@ class TestRepositoryContextIntegration(unittest.TestCase):
         )
 
         # Extended blocks must NOT be present
-        self.assertNotIn("Repository Summary", prompt)
+        self.assertNotIn("Repository Context Summary", prompt)
         self.assertNotIn("Relevant Repository Evidence", prompt)
-        self.assertNotIn("Pull Request", prompt)
         # Original block elements must be present
-        self.assertIn("Deterministic analysis summary:", prompt)
-        self.assertIn("score: 30", prompt)
-        self.assertIn("severity: low", prompt)
+        self.assertIn("Deterministic Security Findings", prompt)
+        self.assertIn("Score  : 30", prompt)
+        self.assertIn("Severity: low", prompt)
 
 if __name__ == "__main__":
     unittest.main()

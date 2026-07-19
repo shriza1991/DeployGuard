@@ -28,7 +28,7 @@ class CodeRiskAnalyzerTests(unittest.TestCase):
 
         self.assertGreaterEqual(analysis["score"], 50)
         self.assertIn(analysis["severity"], {"high", "critical"})
-        self.assertGreaterEqual(analysis["confidence"], 60)
+        self.assertGreaterEqual(analysis["confidence"], 0.60)
         self.assertTrue(any("authentication" in reason.lower() or "security" in reason.lower() for reason in analysis["reasons"]))
         self.assertTrue(analysis["recommendations"])
 

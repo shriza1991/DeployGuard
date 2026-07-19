@@ -12,9 +12,11 @@ import pytest
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT_DIR, "agent-infra-risk"))
 sys.path.insert(0, os.path.join(ROOT_DIR, "agent-code-risk"))
+sys.path.insert(0, os.path.join(ROOT_DIR, "agent-incident-history"))
 sys.path.insert(0, os.path.join(ROOT_DIR, "aggregator"))
 
 import importlib.util
+from incident_history.service import _confidence as incident_confidence
 
 def _import_module_from_path(module_name: str, file_path: str):
     spec = importlib.util.spec_from_file_location(module_name, file_path)
@@ -357,6 +359,92 @@ def test_technology_agnostic_isolation():
     assert decision["decision"] == "SAFE", f"Expected SAFE for pure python lib, got {decision['decision']}"
     assert decision["overall_score"] <= 15, f"Expected low score <= 15, got {decision['overall_score']}"
     assert len(infra_res.get("deterministic_findings", [])) == 0, f"Expected 0 infra findings for non-infra repo, got {len(infra_res.get('deterministic_findings', []))}"
+
+
+def test_confidence_case_1_no_security_findings():
+    """Case 1: No security findings -> Risk low, Confidence > 0.90 (90%)"""
+    payload = {
+        "repository": {"name": "myorg/safe-repo"},
+        "pull_request": {"title": "docs: update readme", "body": "Small readme fix"},
+        "changed_files": [{"filename": "README.md", "patch": "+ Small fix"}],
+    }
+    code_res = code_risk_analyzer(payload)
+    infra_res = infra_risk_analyzer(payload)
+    agent_results = {
+        "code-risk": code_res,
+        "infra-risk": infra_res,
+        "incident-history": {"score": 10, "severity": "low", "confidence": 0.92, "confidence_factors": ["Clean record"]},
+    }
+    decision = make_decision("test-case-1", agent_results)
+    assert decision["overall_score"] <= 15
+    assert decision["overall_confidence"] >= 0.90, f"Expected overall_confidence >= 0.90, got {decision['overall_confidence']}"
+
+
+def test_confidence_case_2_critical_findings():
+    """Case 2: Critical findings -> Risk > 90, Confidence > 0.90 (90%)"""
+    payload = {
+        "repository": {"name": "myorg/api-service"},
+        "pull_request": {"title": "fix: add AWS key", "body": "Hardcoding key"},
+        "changed_files": [{"filename": "config.py", "patch": '+ AWS_SECRET = "AKIAIOSFODNN7EXAMPLE"'}],
+    }
+    code_res = code_risk_analyzer(payload)
+    infra_res = infra_risk_analyzer(payload)
+    agent_results = {
+        "code-risk": code_res,
+        "infra-risk": infra_res,
+        "incident-history": {"score": 10, "severity": "low", "confidence": 0.92},
+    }
+    decision = make_decision("test-case-2", agent_results)
+    assert decision["overall_score"] >= 90
+    assert decision["overall_confidence"] >= 0.90, f"Expected overall_confidence >= 0.90, got {decision['overall_confidence']}"
+
+
+def test_confidence_case_3_missing_git_metadata():
+    """Case 3: Missing Git metadata -> Confidence 0.30 - 0.60"""
+    payload = {}
+    code_res = code_risk_analyzer(payload)
+    infra_res = infra_risk_analyzer(payload)
+    agent_results = {
+        "code-risk": code_res,
+        "infra-risk": infra_res,
+        "incident-history": {"score": 10, "severity": "low", "confidence": 0.35},
+    }
+    decision = make_decision("test-case-3", agent_results)
+    assert 0.30 <= decision["overall_confidence"] <= 0.60, f"Expected confidence 0.30-0.60 for missing metadata, got {decision['overall_confidence']}"
+
+
+def test_confidence_case_4_analysis_timeout():
+    """Case 4: Analysis timeout / error -> Confidence < 0.30"""
+    agent_results = {
+        "code-risk": {"score": 0, "severity": "low", "confidence": 0.10},
+        "infra-risk": {"score": 0, "severity": "low", "confidence": 0.10},
+        "incident-history": {"score": 10, "severity": "low", "confidence": 0.10},
+    }
+    decision = make_decision("test-case-4", agent_results)
+    assert decision["overall_confidence"] < 0.30, f"Expected timeout confidence < 0.30, got {decision['overall_confidence']}"
+
+
+def test_confidence_case_5_format_safeguard():
+    """Case 5: Verify backend confidence float 0.94 vs percentage conversion helper"""
+    def normalize_confidence(value):
+        if value is None:
+            return None
+        if value <= 1.0 and value >= 0.0:
+            return round(value * 100)
+        return round(min(100, max(0, value)))
+
+    assert normalize_confidence(0.94) == 94
+    assert normalize_confidence(94) == 94
+    assert normalize_confidence(0.0) == 0
+    assert normalize_confidence(None) is None
+
+
+def test_confidence_case_6_zero_incidents_high_confidence():
+    """Case 6: 0 historical incidents matched with healthy search -> High confidence (>=0.90)"""
+
+    conf, factors = incident_confidence(incidents=[], qdrant_available=True, embedding_quality="ok")
+    assert conf >= 0.90, f"Expected 0 incidents with healthy search to yield confidence >= 0.90, got {conf}"
+    assert "No historical incidents matched (clean record)" in factors
 
 
 if __name__ == "__main__":

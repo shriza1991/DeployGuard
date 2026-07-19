@@ -92,6 +92,68 @@ def start_health_server(port: int = 8082):
 start_health_server(8082)
 logger.info("Health server started on port 8082")
 
+def calculate_agent_confidence(payload: dict, analysis: dict, llm_result: dict | None = None, timed_out: bool = False) -> tuple[float, list[str]]:
+    factors: list[str] = list(analysis.get("confidence_factors") or [])
+    conf = 0.0
+
+    analyzer_conf = analysis.get("confidence")
+    if analyzer_conf is not None and isinstance(analyzer_conf, (int, float)) and analyzer_conf > 0:
+        val = float(analyzer_conf)
+        conf = val / 100.0 if val > 1.0 else val
+
+    llm_conf = (llm_result or {}).get("confidence", 0.0)
+    llm_available = (llm_result or {}).get("available", False)
+    if llm_available and isinstance(llm_conf, (int, float)) and llm_conf > 0:
+        llm_val = float(llm_conf)
+        llm_val = llm_val / 100.0 if llm_val > 1.0 else llm_val
+        conf = max(conf, llm_val)
+        factors.append("LLM verification completed")
+    elif llm_available:
+        factors.append("LLM reasoning active")
+
+    if conf == 0.0:
+        base = 50
+        patch_text = payload.get("patch_text") or payload.get("diff") or ""
+        files = payload.get("changed_files") or payload.get("files") or []
+        if patch_text.strip() or files:
+            base += 20
+            factors.append("Infrastructure diff available")
+        else:
+            base -= 20
+
+        pr = payload.get("pull_request") or {}
+        if pr.get("title") or pr.get("body") or (payload.get("head_commit") or {}).get("message"):
+            base += 15
+            factors.append("PR metadata available")
+        else:
+            base -= 15
+
+        if analysis.get("reasons") or analysis.get("deterministic_findings"):
+            base += 10
+            factors.append("Deterministic rules evaluated")
+
+        if llm_available:
+            base += 10
+
+        if (payload.get("repository") or {}).get("name"):
+            base += 5
+            factors.append("Repository metadata parsed")
+
+        if timed_out:
+            base -= 20
+
+        conf = max(0.0, min(100.0, float(base))) / 100.0
+
+    seen = set()
+    dedup_factors = []
+    for f in factors:
+        if f not in seen:
+            seen.add(f)
+            dedup_factors.append(f)
+
+    return round(max(0.0, min(1.0, conf)), 2), dedup_factors
+
+
 logger.info("agent-infra-risk started, waiting for events...")
 for msg in consumer:
     event = msg.value
@@ -104,7 +166,7 @@ for msg in consumer:
     try:
         analysis = analyze_infra_risk(payload)
         llm_result = reasoner.reason_about_change(payload, analysis)
-        confidence_val = max(0.0, min(1.0, analysis.get("confidence", 0.0) / 100.0))
+        confidence_val, confidence_factors = calculate_agent_confidence(payload, analysis, llm_result)
 
         output = {
             "agent": "infra-risk",
@@ -112,9 +174,10 @@ for msg in consumer:
             "score": analysis["score"],
             "severity": analysis["severity"],
             "confidence": confidence_val,
+            "confidence_factors": confidence_factors,
             "reasons": analysis["reasons"],
             "recommendations": analysis["recommendations"],
-            "metadata": analysis["metadata"],
+            "metadata": {**analysis["metadata"], "confidence_factors": confidence_factors},
             "llm": {
                 "provider": llm_result.get("provider"),
                 "available": llm_result.get("available", False),

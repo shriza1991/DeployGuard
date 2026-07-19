@@ -668,10 +668,20 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
 
     # Confidence computation
     has_diff = bool(patch_text.strip() or len(files) > 0)
+    confidence_factors = []
+    if has_diff:
+        confidence_factors.append("Git diff available")
+    if context.get("pull_request") or context.get("head_commit"):
+        confidence_factors.append("PR metadata available")
+    if findings:
+        confidence_factors.append("Deterministic rules matched")
+    else:
+        confidence_factors.append("No security vulnerabilities detected")
+
     if has_diff and findings:
         confidence = 0.95
     elif has_diff:
-        confidence = 0.85
+        confidence = 0.90
     elif findings:
         confidence = 0.70
     else:
@@ -695,6 +705,7 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
         "score": score,
         "severity": severity,
         "confidence": float(confidence),
+        "confidence_factors": confidence_factors,
         "reasons": reasons,
         "recommendations": recommendations,
         "deterministic_findings": deterministic_dicts,
@@ -710,6 +721,7 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "findings": deterministic_dicts,
             "deterministic_findings": deterministic_dicts,
             "score_breakdown": breakdown,
+            "confidence_factors": confidence_factors,
         },
     }
 
