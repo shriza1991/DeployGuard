@@ -65,7 +65,7 @@ export const WebhookSimulator: React.FC = () => {
   const triggerMutation = useMutation({
     mutationFn: triggerDeployment,
     onSuccess: (data) => {
-      const cid = data.correlation_id;
+      const cid = data.correlation_id ?? null;
       setActiveCorrelationId(cid);
       setCollectedAgents([]);
       setPipelineComplete(false);

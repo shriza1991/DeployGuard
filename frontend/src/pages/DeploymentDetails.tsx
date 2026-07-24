@@ -25,7 +25,6 @@ import {
   Hash,
 } from 'lucide-react';
 import { ConfidenceDisplay } from '../components/ConfidenceDisplay';
-import { normalizeConfidence } from '../utils/confidence';
 
 const AGENT_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
   'code-risk': {
@@ -423,7 +422,6 @@ export const DeploymentDetails: React.FC = () => {
           const isExpanded = expandedAgents[key] !== false; // default open
           const score = data.score ?? 0;
           const severity = data.severity ?? 'low';
-          const agentConfidencePct = normalizeConfidence(data.confidence) ?? 90;
           const agentFactors: string[] = data.confidence_factors || data.metadata?.confidence_factors || [];
           const reasons: string[] = data.reasons ?? [];
           const recommendations: string[] = data.recommendations ?? [];

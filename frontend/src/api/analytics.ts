@@ -175,7 +175,7 @@ export async function simulateScan(
 ): Promise<SimulateScanResponse> {
   const result = await triggerDeployment(request);
   return {
-    correlation_id: result.correlation_id,
+    correlation_id: result.correlation_id ?? '',
     status: 'sent',
   };
 }
