@@ -147,3 +147,9 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request, json; res = json.loads(urllib.request.urlopen('http://localhost:8003/readiness').read().decode()); exit(0 if res.get('ready') else 1)\" || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s

@@ -1,1 +1,8 @@
-{}
+{
+  "test_orchestration_redesign.py::TestOrchestrationRedesign::test_code_risk_wait_for_readiness_backoff": true,
+  "test_orchestration_redesign.py::TestOrchestrationRedesign::test_event_driven_aggregation_when_all_agents_respond": true,
+  "test_orchestration_redesign.py::TestOrchestrationRedesign::test_late_result_recorded_without_altering_decision": true,
+  "test_orchestration_redesign.py::TestOrchestrationRedesign::test_settings_expected_agents": true,
+  "test_orchestration_redesign.py::TestOrchestrationRedesign::test_timeout_aggregation_marks_missing_agents": true,
+  "agent-infra-risk/test_risk_analyzers.py::InfraRiskAnalyzerTests": true
+}

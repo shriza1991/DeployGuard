@@ -1,3 +1,4 @@
+import datetime
 import os
 import time
 import logging
@@ -8,6 +9,54 @@ logger = logging.getLogger("code-risk-agent")
 
 REPOSITORY_CONTEXT_URL = os.getenv("REPOSITORY_CONTEXT_URL", "http://repository-context-service:8003").rstrip("/")
 REPOSITORY_CONTEXT_TIMEOUT = float(os.getenv("REPOSITORY_CONTEXT_TIMEOUT", "10.0"))
+MAX_READINESS_WAIT_SECONDS = float(os.getenv("MAX_READINESS_WAIT_SECONDS", "90.0"))
+
+
+def wait_for_readiness(max_wait_seconds: float = MAX_READINESS_WAIT_SECONDS, initial_backoff: float = 1.0) -> bool:
+    """
+    Polls Repository Context Service /readiness endpoint with exponential backoff.
+    Returns True if service is READY, False if timeout expired.
+    """
+    readiness_url = f"{REPOSITORY_CONTEXT_URL}/readiness"
+    start_time = time.perf_counter()
+    current_backoff = initial_backoff
+    max_backoff = 10.0
+
+    while True:
+        elapsed = time.perf_counter() - start_time
+        if elapsed >= max_wait_seconds:
+            logger.warning(
+                "[code-risk] Timed out waiting for Repository Context Service readiness after %.1f seconds",
+                elapsed
+            )
+            return False
+
+        try:
+            res = requests.get(readiness_url, timeout=3.0)
+            if res.status_code == 200:
+                data = res.json()
+                state = data.get("state", "UNKNOWN")
+                if state == "READY" or data.get("ready") is True:
+                    logger.info("[code-risk] Repository Context Service is READY! (elapsed: %.1fs)", elapsed)
+                    return True
+                logger.info(
+                    "[code-risk] Waiting for Repository Context Service readiness (current state: WAITING_FOR_DEPENDENCY [%s])... retrying in %.1fs (elapsed: %.1fs)",
+                    state, current_backoff, elapsed
+                )
+            else:
+                logger.info(
+                    "[code-risk] Waiting for Repository Context Service readiness (HTTP Status %s)... retrying in %.1fs (elapsed: %.1fs)",
+                    res.status_code, current_backoff, elapsed
+                )
+        except Exception as exc:
+            logger.info(
+                "[code-risk] Waiting for Repository Context Service connection (%s)... retrying in %.1fs (elapsed: %.1fs)",
+                exc, current_backoff, elapsed
+            )
+
+        time.sleep(current_backoff)
+        current_backoff = min(current_backoff * 2.0, max_backoff)
+
 
 class RepositoryEvidenceProvider:
     @staticmethod
@@ -107,7 +156,21 @@ class RepositoryEvidenceProvider:
             "commit_message": commit_message
         }
 
-        # 6. Execute request with strict timeout
+        # Check repository context service readiness with backoff
+        repo_context_started = time.time()
+        repo_context_started_iso = datetime.datetime.fromtimestamp(repo_context_started, datetime.timezone.utc).isoformat()
+        metrics["repository_context_started_at"] = repo_context_started_iso
+
+        ready = wait_for_readiness()
+        if not ready:
+            logger.warning("[code-risk] Skipping repository context request: service is not ready")
+            metrics["repository_context_available"] = False
+            return [], metrics
+
+        repo_context_ready_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        metrics["repository_context_ready_at"] = repo_context_ready_iso
+
+        # Execute request with strict timeout
         url = f"{REPOSITORY_CONTEXT_URL}/repository/context"
         logger.info("Repository context request started: URL=%s, Repository=%s, Branch=%s", url, repo_name, branch)
         
@@ -118,6 +181,7 @@ class RepositoryEvidenceProvider:
                 json=request_body,
                 timeout=REPOSITORY_CONTEXT_TIMEOUT
             )
+
             logger.info("HTTP Status: %s", response.status_code)
             logger.info("Response Body: %s", response.text)
             logger.info("Response Headers: %s", response.headers)

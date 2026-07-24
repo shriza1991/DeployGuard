@@ -44,8 +44,9 @@ class TestRepositoryContextIntegration(unittest.TestCase):
             "metadata": {"analyzer": "code-analyzer"}
         }
 
+    @patch("repository_context_client.wait_for_readiness", return_value=True)
     @patch("requests.post")
-    def test_client_payload_parsing_and_success(self, mock_post):
+    def test_client_payload_parsing_and_success(self, mock_post, mock_readiness):
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -82,8 +83,9 @@ class TestRepositoryContextIntegration(unittest.TestCase):
         self.assertIn("Auth hotfix commit", json_data["commit_message"])
         self.assertIn("--- a/gateway/main.py", json_data["diff"])
 
+    @patch("repository_context_client.wait_for_readiness", return_value=True)
     @patch("requests.post")
-    def test_client_timeout_handling(self, mock_post):
+    def test_client_timeout_handling(self, mock_post, mock_readiness):
         # Mock timeout exception
         mock_post.side_effect = requests.Timeout("Connection timed out")
 
@@ -93,8 +95,10 @@ class TestRepositoryContextIntegration(unittest.TestCase):
         self.assertFalse(metrics["repository_context_available"])
         self.assertEqual(metrics["retrieved_chunks"], 0)
 
+
+    @patch("repository_context_client.wait_for_readiness", return_value=True)
     @patch("requests.post")
-    def test_client_malformed_json(self, mock_post):
+    def test_client_malformed_json(self, mock_post, mock_readiness):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.side_effect = ValueError("Malformed JSON")
@@ -104,6 +108,7 @@ class TestRepositoryContextIntegration(unittest.TestCase):
         
         self.assertEqual(evidence, [])
         self.assertFalse(metrics["repository_context_available"])
+
 
     def test_context_assembly_limits_and_truncation(self):
         # Create 12 mock evidence chunks (exceeds limit of 10)

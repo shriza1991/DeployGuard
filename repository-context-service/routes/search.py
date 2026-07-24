@@ -13,7 +13,23 @@ async def search_repository(request: Request, body: SearchRequest):
     """
     Performs semantic search on repository code chunks in Qdrant.
     """
+    try:
+        state = getattr(request.app.state, "service_state", None)
+        if state is None:
+            from app import get_service_state
+            state = get_service_state()
+        if state not in ("READY", None):
+            raise HTTPException(
+                status_code=503,
+                detail={"state": state, "message": "Repository Context Service embedding model is loading"}
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     embedding_service = request.app.state.embedding_service
+
     qdrant_service = request.app.state.qdrant_service
 
     if not body.query.strip():
@@ -233,7 +249,23 @@ async def get_repository_context(request: Request, body: ContextRequest):
     Primary endpoint for AI agents. Semantically retrieves relevant code/doc chunks
     based on a list of changed files and a git diff, applying quality scoring heuristics.
     """
+    try:
+        state = getattr(request.app.state, "service_state", None)
+        if state is None:
+            from app import get_service_state
+            state = get_service_state()
+        if state not in ("READY", None):
+            raise HTTPException(
+                status_code=503,
+                detail={"state": state, "message": "Repository Context Service embedding model is loading"}
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     t_start = time.perf_counter()
+
     settings = request.app.state.settings
     embedding_service = request.app.state.embedding_service
     qdrant_service = request.app.state.qdrant_service

@@ -161,12 +161,26 @@ for msg in consumer:
     correlation_id = event.get("correlation_id") if isinstance(event, dict) else None
     logger.info("[infra-risk] received event %s", correlation_id)
 
+    start_time_sec = time.time()
+    started_at_iso = datetime.datetime.fromtimestamp(start_time_sec, datetime.timezone.utc).isoformat()
     start_run = time.perf_counter()
     confidence_val = 0.0
     try:
         analysis = analyze_infra_risk(payload)
         llm_result = reasoner.reason_about_change(payload, analysis)
         confidence_val, confidence_factors = calculate_agent_confidence(payload, analysis, llm_result)
+
+        completed_time_sec = time.time()
+        completed_at_iso = datetime.datetime.fromtimestamp(completed_time_sec, datetime.timezone.utc).isoformat()
+        latency_ms = round((time.perf_counter() - start_run) * 1000.0, 2)
+
+        meta = {
+            **analysis["metadata"],
+            "confidence_factors": confidence_factors,
+            "started_at": started_at_iso,
+            "completed_at": completed_at_iso,
+            "infra_risk_ms": latency_ms,
+        }
 
         output = {
             "agent": "infra-risk",
@@ -177,7 +191,10 @@ for msg in consumer:
             "confidence_factors": confidence_factors,
             "reasons": analysis["reasons"],
             "recommendations": analysis["recommendations"],
-            "metadata": {**analysis["metadata"], "confidence_factors": confidence_factors},
+            "started_at": started_at_iso,
+            "completed_at": completed_at_iso,
+            "duration_ms": latency_ms,
+            "metadata": meta,
             "llm": {
                 "provider": llm_result.get("provider"),
                 "available": llm_result.get("available", False),
@@ -192,6 +209,8 @@ for msg in consumer:
         logger.info("[infra-risk] published result %s", output)
     except Exception as exc:
         logger.exception("[infra-risk] failed to analyze event: %s", exc)
+        completed_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        latency_ms = round((time.perf_counter() - start_run) * 1000.0, 2)
         output = {
             "agent": "infra-risk",
             "correlation_id": correlation_id,
@@ -200,7 +219,10 @@ for msg in consumer:
             "confidence": 0.0,
             "reasons": ["Unexpected failure while analyzing the deployment change."],
             "recommendations": ["Inspect the service logs and retry the analysis."],
-            "metadata": {"error": str(exc), "payload_type": type(event).__name__},
+            "started_at": started_at_iso,
+            "completed_at": completed_at_iso,
+            "duration_ms": latency_ms,
+            "metadata": {"error": str(exc), "payload_type": type(event).__name__, "started_at": started_at_iso, "completed_at": completed_at_iso, "infra_risk_ms": latency_ms},
             "llm": {
                 "summary": "Deterministic analysis was not completed due to an unexpected error.",
                 "additional_risks": [],

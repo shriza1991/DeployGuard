@@ -1,8 +1,8 @@
-from __future__ import annotations
-
+import datetime
 import logging
 import time
 from typing import Any
+
 
 from incident_history.config import Settings
 from incident_history.embeddings import get_embedding_provider
@@ -53,7 +53,9 @@ class IncidentHistoryService:
             self.total_confidence += confidence_val
 
     def _analyze_event_internal(self, payload: dict[str, Any], correlation_id: str | None, started: float) -> dict[str, Any]:
+        started_wall = time.time()
         deployment_document = build_deployment_document(payload)
+
         if not deployment_document:
             deployment_document = "empty deployment event"
 
@@ -126,6 +128,15 @@ class IncidentHistoryService:
         deterministic["metadata"]["score_breakdown"] = breakdown
         deterministic["metadata"]["confidence_factors"] = factors
 
+        completed_time_sec = time.time()
+        completed_at_iso = datetime.datetime.fromtimestamp(completed_time_sec, datetime.timezone.utc).isoformat()
+        latency_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        started_at_iso = datetime.datetime.fromtimestamp(started_wall, datetime.timezone.utc).isoformat() if 'started_wall' in locals() else completed_at_iso
+
+        deterministic["metadata"]["started_at"] = started_at_iso
+        deterministic["metadata"]["completed_at"] = completed_at_iso
+        deterministic["metadata"]["incident_history_ms"] = latency_ms
+
         return {
             "agent": "incident-history",
             "correlation_id": correlation_id,
@@ -138,11 +149,15 @@ class IncidentHistoryService:
                 deterministic["recommendations"],
                 llm_result.recommendations,
             ),
+            "started_at": started_at_iso,
+            "completed_at": completed_at_iso,
+            "duration_ms": latency_ms,
             "score_breakdown": breakdown,
             "metadata": deterministic["metadata"],
             "similar_incidents": [incident.output() for incident in incidents],
             "llm": llm_result.output(),
         }
+
 
     def _deterministic_result(
         self,

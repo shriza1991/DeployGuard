@@ -2,10 +2,13 @@
 import json
 import logging
 import os
+import time
 import uuid
+from datetime import datetime, timezone
 
 import redis
 from fastapi import APIRouter, Header
+
 from kafka import KafkaProducer
 from pydantic import BaseModel
 
@@ -84,10 +87,13 @@ async def github_webhook(
     # Normalize action on payload for metadata persistence
     payload.action = action
 
+    t_webhook_start = time.perf_counter()
+    webhook_received_at = datetime.now(timezone.utc).isoformat()
     correlation_id = str(uuid.uuid4())
 
     event = {
         "correlation_id": correlation_id,
+        "webhook_received_at": webhook_received_at,
         "payload": payload.model_dump(),
     }
 
@@ -97,7 +103,8 @@ async def github_webhook(
     producer.send(TOPIC, event)
     producer.flush()
 
-    logging.info("Successfully published to Kafka")
+    webhook_ms = round((time.perf_counter() - t_webhook_start) * 1000.0, 2)
+    logging.info("Successfully published to Kafka in %.2f ms", webhook_ms)
 
     # --- Persist webhook metadata to Redis so the REST API can enrich responses ---
     try:
@@ -129,7 +136,10 @@ async def github_webhook(
             "pull_request_body": pull_request.get("body", ""),
             "pr_user_login": pr_user.get("login", ""),
             "action": payload.action or "",
+            "webhook_received_at": webhook_received_at,
+            "webhook_ms": webhook_ms,
         }
+
 
         # branch fallback: if no PR head ref, use ref from sender or leave as ""
         if not meta["branch"]:
