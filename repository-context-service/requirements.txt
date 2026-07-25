@@ -3,6 +3,9 @@ uvicorn
 redis
 requests
 GitPython
-sentence-transformers
+
+torch==2.9.1+cpu
+sentence-transformers==2.3.0
+
 PyYAML
 python-dotenv
