@@ -387,7 +387,13 @@ async def get_repository_context(request: Request, body: ContextRequest):
             payload = hit.get("payload") or {}
             rel_path = payload.get("relative_path", "")
             chunk_index = payload.get("chunk_index", 0)
+            # Build a deterministic evidence ID that includes the commit SHA
+            # when available so results are traceable to a specific snapshot.
+            stored_commit = payload.get("commit", "")
+            request_commit = body.commit or stored_commit
             evidence_id = f"{body.repository}:{rel_path}:{chunk_index}"
+            if request_commit:
+                evidence_id = f"{body.repository}:{request_commit}:{rel_path}:{chunk_index}"
             
             results.append({
                 "score": hit.get("score", 0.0),
@@ -396,9 +402,9 @@ async def get_repository_context(request: Request, body: ContextRequest):
                 "evidence_id": evidence_id,
                 "text": payload.get("text", ""),
                 "metadata": {
-                    "repository": payload.get("repository", ""),
-                    "branch": payload.get("branch", ""),
-                    "commit": payload.get("commit", ""),
+                    "repository": payload.get("repository") or body.repository,
+                    "branch": payload.get("branch") or body.branch,
+                    "commit": payload.get("commit", "") or body.commit or "",
                     "language": payload.get("language", ""),
                     "relative_path": payload.get("relative_path", ""),
                     "filename": payload.get("filename", ""),
@@ -446,6 +452,7 @@ async def get_repository_context(request: Request, body: ContextRequest):
             f"Repository Context retrieval summary:\n"
             f"Repository: {body.repository}\n"
             f"Branch: {body.branch or 'None'}\n"
+            f"Commit: {body.commit or 'not provided'}\n"
             f"Fallback: {'Yes' if fallback_triggered else 'No'}\n"
             f"Chunks: {len(results)}\n"
             f"Top Similarity: {round(top_similarity, 2)}\n"

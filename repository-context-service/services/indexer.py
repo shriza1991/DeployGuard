@@ -8,7 +8,7 @@ import time
 from typing import List, Dict, Any, Tuple
 from models import RepoStatus, RepoManifest, CodeChunk, CodeChunkMetadata
 from config import Settings
-from services.clone_service import CloneService, get_repo_name
+from services.clone_service import CloneService, get_repo_name, get_repo_full_name
 from services.redis_service import RedisService
 from services.qdrant_service import QdrantService
 from services.chunker import Chunker
@@ -200,13 +200,35 @@ class Indexer:
         self.chunker = chunker
         self.embedding_service = embedding_service
 
-    def index_repository(self, repository_url: str, branch: str = "main") -> None:
+    def index_repository(
+        self,
+        repository_url: str,
+        branch: str = "main",
+        repository_full_name: str | None = None,
+    ) -> None:
         """
         Clones or updates the repository. Computes changes between commits to perform
         incremental indexing. Falls back to full re-indexing if incremental fails.
+
+        Parameters
+        ----------
+        repository_url:
+            The URL used to clone the repository (e.g. the GitHub clone_url).
+        branch:
+            The branch to index.
+        repository_full_name:
+            Authoritative identifier from the GitHub webhook payload
+            (``repository.full_name``, e.g. ``"acme/my-service"``).  When
+            supplied this is used verbatim as the partition key in both Qdrant
+            and Redis.  When omitted the full name is derived from the clone URL
+            via :func:`get_repo_full_name`, which handles HTTPS and SSH formats.
         """
         t_index_start = time.perf_counter()
-        repository = get_repo_name(repository_url)
+        # Resolve the canonical repository identifier
+        repository = (
+            repository_full_name
+            or get_repo_full_name(repository_url)
+        )
         logger.info(f"Starting indexing for repository: {repository} (branch: {branch})")
         
         initial_status = RepoStatus(

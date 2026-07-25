@@ -537,7 +537,10 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
                 "pull_request_title": (context.get("pull_request") or {}).get("title"),
                 "pull_request_body": (context.get("pull_request") or {}).get("body"),
                 "commit_message": (context.get("head_commit") or {}).get("message"),
-                "repository": (context.get("repository") or {}).get("name"),
+                "repository": (
+                (context.get("repository") or {}).get("full_name")
+                or (context.get("repository") or {}).get("name")
+            ),
                 "source": "pull_request" if context.get("pull_request") else "commit",
                 "findings": deterministic_dicts,
                 "deterministic_findings": deterministic_dicts,
@@ -716,7 +719,10 @@ def analyze_code_risk(payload: dict[str, Any]) -> dict[str, Any]:
             "pull_request_title": (context.get("pull_request") or {}).get("title"),
             "pull_request_body": (context.get("pull_request") or {}).get("body"),
             "commit_message": (context.get("head_commit") or {}).get("message"),
-            "repository": (context.get("repository") or {}).get("name"),
+            "repository": (
+                (context.get("repository") or {}).get("full_name")
+                or (context.get("repository") or {}).get("name")
+            ),
             "source": "pull_request" if context.get("pull_request") else "commit",
             "findings": deterministic_dicts,
             "deterministic_findings": deterministic_dicts,

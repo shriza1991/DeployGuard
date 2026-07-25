@@ -4,6 +4,12 @@ from typing import List, Optional, Dict, Any
 class IndexRequest(BaseModel):
     repository_url: str
     branch: str = "main"
+    # When supplied, overrides the identifier derived from the URL.
+    # Callers should set this to repository.full_name from the GitHub webhook
+    # (e.g. "acme/my-service") so vectors are partitioned per organisation.
+    repository_full_name: Optional[str] = None
+    # The GitHub clone URL forwarded from the webhook payload.
+    clone_url: Optional[str] = None
 
 class SearchRequest(BaseModel):
     repository: str
@@ -16,6 +22,13 @@ class ContextRequest(BaseModel):
     branch: str = "main"
     changed_files: List[str]
     diff: str = ""
+    # Optional commit SHA from the webhook head_commit.id.
+    # Stored as metadata on returned snippets for traceability.
+    commit: Optional[str] = None
+    # The GitHub clone URL — forwarded for auto-indexing decisions.
+    clone_url: Optional[str] = None
+    # The repository default_branch from the webhook payload.
+    default_branch: Optional[str] = None
 
 class CodeChunkMetadata(BaseModel):
     repository: str

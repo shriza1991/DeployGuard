@@ -9,13 +9,49 @@ import git
 logger = logging.getLogger("repository-context-service")
 
 def get_repo_name(url: str) -> str:
-    """Extracts the repository name from a URL or path."""
+    """Extracts the short repository name from a URL or path (e.g. 'my-service')."""
     parsed = urllib.parse.urlparse(url)
     path = parsed.path if parsed.path else url
     base = os.path.basename(path.rstrip("/\\"))
     if base.endswith(".git"):
         base = base[:-4]
     return base or "unknown_repo"
+
+
+def get_repo_full_name(url: str) -> str:
+    """
+    Extracts the owner/repo full name from a GitHub-style clone URL.
+
+    Examples
+    --------
+    - https://github.com/acme/my-service.git  →  "acme/my-service"
+    - git@github.com:acme/my-service.git      →  "acme/my-service"
+    - /local/path/my-service                  →  "my-service"  (fallback)
+
+    Falls back to the short repo name when the URL has no recognisable
+    owner segment (e.g. bare file paths or single-component paths).
+    """
+    # Normalise SSH-style URLs (git@github.com:owner/repo.git) to a path
+    url_clean = url.strip()
+    if url_clean.startswith("git@"):
+        # git@github.com:owner/repo.git  →  owner/repo.git
+        url_clean = url_clean.split(":", 1)[-1]
+
+    parsed = urllib.parse.urlparse(url_clean)
+    path = parsed.path if parsed.path else url_clean
+    # Strip leading slash and trailing .git
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+
+    parts = path.split("/")
+    # Need at least two non-empty parts to form owner/repo
+    parts = [p for p in parts if p]
+    if len(parts) >= 2:
+        return f"{parts[-2]}/{parts[-1]}"
+
+    # Fallback: just the repository short name
+    return parts[-1] if parts else "unknown_repo"
 
 def force_rmtree(path: str) -> None:
     """

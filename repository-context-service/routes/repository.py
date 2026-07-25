@@ -9,14 +9,24 @@ router = APIRouter()
 async def index_repository(request: Request, body: IndexRequest, background_tasks: BackgroundTasks):
     """
     Kicks off cloning, parsing, chunking, and embedding a repository in the background.
+
+    For webhook-driven calls, pass ``repository_full_name`` (the GitHub
+    ``repository.full_name`` field, e.g. ``"acme/my-service"``) and
+    ``clone_url`` (``repository.clone_url``) to ensure the correct
+    clone URL and identifier are used instead of the defaults derived
+    from ``repository_url``.
     """
     indexer = request.app.state.indexer
+    # Prefer clone_url when explicitly supplied; fall back to repository_url
+    effective_url = body.clone_url or body.repository_url
     background_tasks.add_task(
         indexer.index_repository,
-        repository_url=body.repository_url,
-        branch=body.branch
+        repository_url=effective_url,
+        branch=body.branch,
+        repository_full_name=body.repository_full_name,
     )
     return {"status": "started"}
+
 
 @router.get("/repository/status/{repository}", response_model=RepoStatus)
 async def get_repository_status(request: Request, repository: str, branch: str = Query("main")):
