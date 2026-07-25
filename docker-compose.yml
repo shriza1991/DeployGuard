@@ -53,19 +53,22 @@ services:
 
   frontend:
     build:
-    context: ./frontend
+      context: ./frontend
     image: shriza1991/deployguard-frontend:latest
     container_name: deployguard_frontend
+
     ports:
       - "3000:80"
+
     depends_on:
-    gateway:
-      condition: service_started
-    aggregator:
-      condition: service_started
+      - gateway
+      - aggregator
+      - kafka
+      - redis
 
   gateway:
-    build: ./gateway
+    build:
+      context: ./gateway
     image: shriza1991/deployguard-gateway:latest
     container_name: deployguard_gateway
     ports:
@@ -77,7 +80,8 @@ services:
       KAFKA_BROKER: kafka:9092
 
   agent-code-risk:
-    build: ./agent-code-risk
+    build:
+      context: ./agent-code-risk
     image: shriza1991/deployguard-agent-code-risk:latest
     container_name: deployguard_agent_code_risk
     depends_on:
@@ -90,7 +94,8 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
 
   agent-infra-risk:
-    build: ./agent-infra-risk
+    build:
+      context: ./agent-infra-risk
     image: shriza1991/deployguard-agent-infra-risk:latest
     container_name: deployguard_agent_infra_risk
     depends_on:
@@ -103,7 +108,8 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
 
   agent-incident-history:
-    build: ./agent-incident-history
+    build:
+      context: ./agent-incident-history
     image: shriza1991/deployguard-agent-incident-history:latest
     container_name: deployguard_agent_incident_history
     depends_on:
@@ -114,7 +120,8 @@ services:
       QDRANT_URL: http://qdrant:6333
 
   aggregator:
-    build: ./aggregator
+    build:
+      context: ./aggregator
     image: shriza1991/deployguard-aggregator:latest
     container_name: deployguard_aggregator
     ports:
@@ -130,7 +137,8 @@ services:
 
   repository-context-service:
     image: shriza1991/deployguard-repository-context:latest
-    build: ./repository-context-service
+    build:
+      context: ./repository-context-service
     container_name: deployguard_repository_context_service
 
     ports:
