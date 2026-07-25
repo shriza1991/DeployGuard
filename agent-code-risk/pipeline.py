@@ -6,11 +6,18 @@ Phase 2: LLM security review (Gemini only, no raw webhook data).
 
 Entry point: run_analysis_pipeline(payload) -> dict
 The returned dict is aggregator-compatible (same key shape as before).
+
+Root cause of "changed_lines = 0" bug (fixed here):
+    GitHub pull_request webhook payloads do NOT include file patch text.
+    Patches must be fetched separately via GET /repos/{owner}/{repo}/pulls/{n}/files.
+    risk_analyzers.build_analysis_context() already does this.
+    Phase 1 must therefore call build_analysis_context() FIRST, then feed its
+    enriched file list (with patches) into diff_parser.parse_files().
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 logger = logging.getLogger("code-risk-agent")
 
@@ -20,13 +27,15 @@ def run_analysis_pipeline(payload: Dict[str, Any]) -> Dict[str, Any]:
     Runs Phase 1 then Phase 2 and returns an aggregator-compatible result dict.
 
     Phase 1 — deterministic, no LLM:
-        Parses the diff, classifies files, runs language-specific detectors,
-        fetches repository context, and assembles an AnalysisReport.
+        1. build_analysis_context() — fetches full PR file list with patches from GitHub API
+        2. diff_parser.parse_files() — parses patch text into structured DiffFile objects
+        3. language_classifier — classifies each file's language
+        4. detectors — run per-language security rule engines
+        5. repository_correlator — fetches semantic context chunks
+        6. Assembles AnalysisReport
 
     Phase 2 — LLM only, receives AnalysisReport (never the raw payload):
-        Builds a structured prompt from verified findings,
-        calls Gemini to reason and prioritize,
-        returns a ReviewResult mapped to the aggregator shape.
+        Builds a structured prompt, calls Gemini, returns aggregator dict.
     """
     report = _run_phase1(payload)
     result = _run_phase2(report)
@@ -39,8 +48,8 @@ def run_analysis_pipeline(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _run_phase1(payload: Dict[str, Any]):
     """
-    Deterministic analysis.  Returns an AnalysisReport.
-    No LLM calls permitted here.
+    Deterministic analysis pipeline.  Returns an AnalysisReport.
+    No LLM calls permitted in this function or anything it calls.
     """
     from analysis.models import AnalysisReport, SecurityFinding
     from analysis import diff_parser, language_classifier
@@ -48,25 +57,153 @@ def _run_phase1(payload: Dict[str, Any]):
     from analysis import repository_correlator
     from risk_analyzers import analyze_code_risk, build_analysis_context
 
-    # ── 1. Parse diff into DiffFile objects ──────────────────────────────
-    diff_files = diff_parser.parse(payload)
+    # =========================================================================
+    # STEP 1 — Build enriched analysis context (fetches GitHub file patches)
+    # =========================================================================
+    # build_analysis_context() calls fetch_pull_request_files() which hits
+    # GET /repos/{owner}/{repo}/pulls/{n}/files to retrieve the actual unified
+    # diff for each changed file.  Without this step, patches are empty because
+    # GitHub webhook payloads do not include patch text.
+    context = build_analysis_context(payload)
 
-    # ── 2. Classify languages ─────────────────────────────────────────────
+    enriched_files: List[Dict[str, Any]] = context.get("changed_files") or []
+    pull_request = context.get("pull_request") or {}
+    head_commit = context.get("head_commit") or {}
+    repo_obj = payload.get("repository") or {}
+
+    repository = (
+        repo_obj.get("full_name") or repo_obj.get("name") or ""
+    )
+    branch = (
+        (pull_request.get("head") or {}).get("ref")
+        or repo_obj.get("default_branch")
+        or "main"
+    )
+    commit = head_commit.get("id") or head_commit.get("sha") or ""
+
+    # =========================================================================
+    # STRUCTURED LOGGING — Phase 1 intake
+    # =========================================================================
+    files_with_patch = [f for f in enriched_files if f.get("patch")]
+    files_without_patch = [f for f in enriched_files if not f.get("patch")]
+
+    total_additions = sum(int(f.get("additions") or 0) for f in enriched_files)
+    total_deletions = sum(int(f.get("deletions") or 0) for f in enriched_files)
+
+    # Count added lines from patch text if additions metadata missing
+    if total_additions == 0 and total_deletions == 0:
+        for f in enriched_files:
+            patch = str(f.get("patch") or "")
+            for line in patch.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    total_additions += 1
+                elif line.startswith("-") and not line.startswith("---"):
+                    total_deletions += 1
+
+    logger.info("=" * 70)
+    logger.info("[phase1] DIFF INTAKE REPORT")
+    logger.info("  Repository   : %s", repository or "(unknown)")
+    logger.info("  Branch       : %s", branch)
+    logger.info("  Commit       : %s", commit[:12] if commit else "(unknown)")
+    logger.info("  PR URL       : %s", pull_request.get("url", "(none)"))
+    logger.info("  Files received from build_analysis_context : %d", len(enriched_files))
+    logger.info("  Files with patch text                      : %d", len(files_with_patch))
+    logger.info("  Files without patch (binary or empty)      : %d", len(files_without_patch))
+    logger.info("  Total added lines (+ prefix)               : %d", total_additions)
+    logger.info("  Total removed lines (- prefix)             : %d", total_deletions)
+
+    if enriched_files and (total_additions + total_deletions) == 0:
+        logger.warning(
+            "[phase1] WARNING: %d file(s) received but changed_lines = 0. "
+            "Patches are empty — GitHub API fetch may have failed (check GITHUB_TOKEN) "
+            "or all changed files are binary. Detectors will produce no findings.",
+            len(enriched_files),
+        )
+
+    if files_without_patch:
+        logger.warning(
+            "[phase1] Files with no patch text (binary/empty — skipped by detectors): %s",
+            [f.get("filename") for f in files_without_patch],
+        )
+
+    for f in files_with_patch:
+        patch = str(f.get("patch") or "")
+        adds = sum(1 for l in patch.splitlines() if l.startswith("+") and not l.startswith("+++"))
+        dels = sum(1 for l in patch.splitlines() if l.startswith("-") and not l.startswith("---"))
+        logger.info(
+            "[phase1]   %s  status=%s  +%d/-%d lines  patch_bytes=%d",
+            f.get("filename"), f.get("status", "?"), adds, dels, len(patch),
+        )
+
+    logger.info("=" * 70)
+
+    # =========================================================================
+    # STEP 2 — Parse enriched file list into structured DiffFile objects
+    # =========================================================================
+    # parse_files() accepts the GitHub file dicts WITH patch text.
+    # Do NOT call parse(payload) here — the raw payload has no patch text.
+    diff_files = diff_parser.parse_files(enriched_files)
+
+    logger.info("[phase1] diff_parser produced %d DiffFile objects", len(diff_files))
+    for df in diff_files:
+        logger.info(
+            "[phase1]   DiffFile: %s  language=%-16s  +%d/-%d  "
+            "patch_bytes=%d  functions=%s  imports=%s",
+            df.filename, df.language,
+            df.additions, df.deletions,
+            len(df.patch),
+            df.functions_modified[:5] or [],
+            df.imports_added[:5] or [],
+        )
+
+    # =========================================================================
+    # STEP 3 — Classify languages
+    # =========================================================================
     language_classifier.classify_all(diff_files)
 
-    # ── 3. Run language-specific detectors ────────────────────────────────
-    new_findings: list[SecurityFinding] = []
+    lang_counts: Dict[str, int] = {}
     for df in diff_files:
-        new_findings.extend(run_all_detectors(df))
+        lang_counts[df.language] = lang_counts.get(df.language, 0) + 1
+
+    logger.info("[phase1] Language breakdown: %s", lang_counts)
+
+    # =========================================================================
+    # STEP 4 — Run language-specific detectors
+    # =========================================================================
+    new_findings: list[SecurityFinding] = []
+    detector_log: Dict[str, int] = {}   # detector_name -> finding count
+
+    for df in diff_files:
+        before = len(new_findings)
+        findings_for_file = run_all_detectors(df)
+        new_findings.extend(findings_for_file)
+        count = len(findings_for_file)
+        detector_log[df.filename] = count
+
+        logger.info(
+            "[phase1]   detector(%s/%s): %d finding(s)",
+            df.language, df.filename, count,
+        )
+        for finding in findings_for_file:
+            logger.info(
+                "[phase1]     -> %s [%s] at line %s  matched: %r",
+                finding.rule_id,
+                finding.severity,
+                finding.line_number,
+                finding.matched_text[:80],
+            )
 
     logger.info(
-        "[phase1] Detectors produced %d findings across %d files",
+        "[phase1] DETECTOR SUMMARY: %d total findings across %d files",
         len(new_findings), len(diff_files),
     )
 
-    # ── 4. Run existing risk_analyzers for score/severity/confidence ──────
-    # The existing analyzer produces the legacy score model and backward-compat
-    # fields that the aggregator depends on. We keep it to preserve the scoring.
+    # =========================================================================
+    # STEP 5 — Run legacy risk_analyzers for score/severity/confidence
+    # =========================================================================
+    # analyze_code_risk() calls build_analysis_context() internally again.
+    # This is acceptable — it preserves the existing score/confidence model
+    # which the aggregator depends on.
     try:
         legacy = analyze_code_risk(payload)
     except Exception as exc:
@@ -78,10 +215,8 @@ def _run_phase1(payload: Dict[str, Any]):
             "metadata": {},
         }
 
-    # Merge new detector findings into legacy so score reflects them
-    legacy_findings_raw = legacy.get("deterministic_findings") or []
-
-    # Convert new SecurityFinding objects to legacy dict format for aggregator compat
+    # Merge new detector findings into the legacy findings list
+    legacy_findings_raw = list(legacy.get("deterministic_findings") or [])
     for finding in new_findings:
         legacy_findings_raw.append({
             "category": finding.category,
@@ -95,40 +230,53 @@ def _run_phase1(payload: Dict[str, Any]):
                 "matched": finding.matched_text,
             },
             "description": finding.rule_id,
-            "recommendation": "",   # Phase 2 will provide this
+            "recommendation": "",   # Phase 2 will provide remediation
             "reason": finding.matched_text,
             "weight": _severity_weight(finding.severity),
             "metadata": {"file": finding.file, "line_number": finding.line_number},
         })
 
-    # ── 5. Fetch repository context ───────────────────────────────────────
+    # =========================================================================
+    # STEP 6 — Fetch repository semantic context
+    # =========================================================================
     repo_chunks, ctx_metrics = repository_correlator.fetch(payload)
-    logger.info("[phase1] Repository context: %d chunks, index_status=%s",
-                len(repo_chunks), ctx_metrics.get("index_status", "unknown"))
 
-    # ── 6. Build diff summary ─────────────────────────────────────────────
+    index_status = ctx_metrics.get("index_status", "unknown")
+    chunk_count = len(repo_chunks)
+    ctx_available = chunk_count > 0
+
+    logger.info("[phase1] REPOSITORY CONTEXT:")
+    logger.info("  index_status     : %s", index_status)
+    logger.info("  chunks_retrieved : %d", chunk_count)
+    logger.info("  context_available: %s", ctx_available)
+    if not ctx_available:
+        if index_status == "unknown":
+            logger.warning(
+                "[phase1] Repository context unavailable — index_status=unknown. "
+                "The Repository Context Service may be unreachable or the repository "
+                "has never been indexed. Phase 2 will proceed without semantic context."
+            )
+        elif index_status == "indexing_in_progress":
+            logger.info(
+                "[phase1] Repository indexing is in progress — context will be "
+                "available on the next analysis run."
+            )
+    else:
+        for chunk in repo_chunks[:3]:   # log first 3 chunks only
+            logger.info(
+                "[phase1]   chunk: %s  lines=%s  similarity=%.2f  reason=%s",
+                chunk.file, chunk.lines, chunk.similarity, chunk.reason,
+            )
+
+    # =========================================================================
+    # STEP 7 — Assemble AnalysisReport
+    # =========================================================================
     files_added = [df.filename for df in diff_files if df.status == "added"]
     files_modified = [df.filename for df in diff_files if df.status == "modified"]
     files_deleted = [df.filename for df in diff_files if df.status == "deleted"]
 
-    # ── 7. Extract PR / commit metadata ───────────────────────────────────
-    pull_request = payload.get("pull_request") or {}
-    head_commit = payload.get("head_commit") or {}
-    repo_obj = payload.get("repository") or {}
-
-    repository = (
-        repo_obj.get("full_name") or repo_obj.get("name") or ""
-    )
-    branch = (
-        (pull_request.get("head") or {}).get("ref")
-        or repo_obj.get("default_branch")
-        or "main"
-    )
-    commit = head_commit.get("id") or head_commit.get("sha") or ""
-
     meta = legacy.get("metadata") or {}
 
-    # ── 8. Assemble AnalysisReport ─────────────────────────────────────────
     report = AnalysisReport(
         repository=repository,
         branch=branch,
@@ -151,27 +299,43 @@ def _run_phase1(payload: Dict[str, Any]):
             "metadata": meta,
             "inferred_capabilities": list(meta.get("inferred_capabilities") or []),
             "repository_evidence_metrics": ctx_metrics,
-            "index_status": ctx_metrics.get("index_status", "unknown"),
+            "index_status": index_status,
         },
         summary={
             "file_count": len(diff_files),
             "files_added": len(files_added),
             "files_modified": len(files_modified),
             "files_deleted": len(files_deleted),
+            "total_additions": total_additions,
+            "total_deletions": total_deletions,
+            "language_breakdown": lang_counts,
             "new_finding_count": len(new_findings),
             "legacy_finding_count": len(legacy.get("deterministic_findings") or []),
+            "repository_context_available": ctx_available,
+            "repository_context_chunks": chunk_count,
+            "index_status": index_status,
         },
         pr_title=pull_request.get("title") or "",
         pr_description=pull_request.get("body") or "",
         commit_message=head_commit.get("message") or "",
     )
 
-    logger.info(
-        "[phase1] Report assembled: repo=%s branch=%s commit=%s "
-        "findings=%d score=%d severity=%s",
-        report.repository, report.branch, report.commit[:8] or "?",
-        len(report.findings), report.score, report.severity,
-    )
+    logger.info("=" * 70)
+    logger.info("[phase1] ANALYSIS REPORT ASSEMBLED")
+    logger.info("  Repository          : %s", report.repository)
+    logger.info("  Branch              : %s", report.branch)
+    logger.info("  Commit              : %s", report.commit[:12] if report.commit else "?")
+    logger.info("  Files parsed        : %d", len(diff_files))
+    logger.info("  Total added lines   : %d", total_additions)
+    logger.info("  Total removed lines : %d", total_deletions)
+    logger.info("  Language breakdown  : %s", lang_counts)
+    logger.info("  Detectors run       : %d files", len(diff_files))
+    logger.info("  New findings        : %d", len(new_findings))
+    logger.info("  Score (legacy)      : %d  severity=%s", report.score, report.severity)
+    logger.info("  Context available   : %s  chunks=%d  status=%s",
+                ctx_available, chunk_count, index_status)
+    logger.info("=" * 70)
+
     return report
 
 

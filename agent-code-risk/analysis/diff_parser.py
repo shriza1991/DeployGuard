@@ -3,6 +3,11 @@ analysis/diff_parser.py — Parse unified diff into structured DiffFile objects.
 
 Pure text/regex — no AST, no external dependencies.
 Only inspects lines; never calls the network or filesystem.
+
+Two entry points:
+  parse(payload)       — legacy: reads from raw webhook payload keys
+  parse_files(files)   — primary: accepts pre-fetched GitHub PR file list
+                         (use this when patches have been fetched from the GitHub API)
 """
 from __future__ import annotations
 
@@ -17,21 +22,40 @@ _PY_FUNC = re.compile(r"\bdef\s+(\w+)\s*\(")
 _PY_CLASS = re.compile(r"\bclass\s+(\w+)[\s(:]")
 _JS_FUNC = re.compile(r"(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\(.*?\)\s*=>|\bfunction\b))")
 _IMPORT_PY = re.compile(r"^\+\s*(?:import|from)\s+(\S+)")
-_IMPORT_JS = re.compile(r"^\+\s*(?:import|require)\s*[\({'\"](\S+?)['\"\)}]")
+_IMPORT_JS = re.compile(r"^\+\s*(?:import|require)\s*[\({'\"](\\S+?)['\"\\)}]")
 _IMPORT_TF = re.compile(r"^\+\s*(?:module|provider)\s+[\"'](\w+)")
+
+
+def parse_files(files: List[Dict[str, Any]]) -> List[DiffFile]:
+    """
+    Parse a pre-fetched list of GitHub PR file objects into DiffFile objects.
+
+    This is the **primary** entry point.  Use this when files have already been
+    fetched from the GitHub API (``GET /repos/{owner}/{repo}/pulls/{n}/files``)
+    via ``risk_analyzers.build_analysis_context()`` or equivalent.
+
+    Each entry is expected to be a GitHub file object with:
+        filename    — relative path (required)
+        status      — "added" | "modified" | "deleted" | "renamed"
+        additions   — int
+        deletions   — int
+        patch       — unified diff string (may be absent for binary files)
+    """
+    diff_files: List[DiffFile] = []
+    for entry in files:
+        if not isinstance(entry, dict) or not entry.get("filename"):
+            continue
+        diff_files.append(_parse_entry(entry))
+    return diff_files
 
 
 def parse(payload: Dict[str, Any]) -> List[DiffFile]:
     """
-    Parse the webhook payload into a list of DiffFile objects.
+    Fallback entry point: reads file list from raw webhook payload keys.
 
-    Reads from:
-    - ``payload["files"]``           — standard GitHub PR files list
-    - ``payload["changed_files"]``   — gateway-injected list (same format)
-    - ``payload["diffs"]``           — alternate key used by some simulators
-
-    Each entry is expected to be a dict with at least ``filename`` and optionally
-    ``status``, ``additions``, ``deletions``, and ``patch`` keys.
+    WARNING: GitHub webhook payloads do NOT include patch text in changed_files.
+    Patches must be fetched from the GitHub API first (via build_analysis_context).
+    Use parse_files() instead whenever the enriched file list is available.
     """
     raw_files: List[Dict[str, Any]] = []
     for key in ("files", "changed_files", "diffs"):
@@ -43,11 +67,7 @@ def parse(payload: Dict[str, Any]) -> List[DiffFile]:
             if raw_files:
                 break
 
-    diff_files: List[DiffFile] = []
-    for entry in raw_files:
-        df = _parse_entry(entry)
-        diff_files.append(df)
-    return diff_files
+    return parse_files(raw_files)
 
 
 def _parse_entry(entry: Dict[str, Any]) -> DiffFile:
@@ -107,7 +127,6 @@ def _extract_functions(filename: str, patch: str) -> List[str]:
     for m in _HUNK_HEADER.finditer(patch):
         ctx = m.group(1).strip()
         if ctx:
-            # Strip common modifiers so we get a clean name
             name = ctx.split("(")[0].split()[-1] if ctx else ""
             if name and re.match(r"\w+", name):
                 found.append(name)
@@ -126,14 +145,13 @@ def _extract_functions(filename: str, patch: str) -> List[str]:
                 if name:
                     found.append(name)
 
-    # Deduplicate preserving order
     seen: set = set()
     deduped: List[str] = []
     for name in found:
         if name not in seen:
             seen.add(name)
             deduped.append(name)
-    return deduped[:20]   # cap to avoid noise
+    return deduped[:20]
 
 
 def _extract_imports(filename: str, patch: str) -> List[str]:
@@ -147,7 +165,7 @@ def _extract_imports(filename: str, patch: str) -> List[str]:
         if lower.endswith(".py"):
             m = _IMPORT_PY.match(line)
             if m:
-                imports.append(m.group(1).split(".")[0])   # top-level package
+                imports.append(m.group(1).split(".")[0])
         elif lower.endswith((".js", ".ts", ".jsx", ".tsx", ".mjs")):
             m = _IMPORT_JS.match(line)
             if m:
