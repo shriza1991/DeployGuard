@@ -56,8 +56,12 @@ def assemble_context(
     commit_message = head_commit.get("message") or ""
 
     repo_obj = payload.get("repository") or {}
-    repo_full_name = repo_obj.get("name") or repo_obj.get("full_name") or "unknown"
-    repository = repo_full_name.split("/")[-1]
+    repo_full_name = repo_obj.get("full_name") or repo_obj.get("name") or "unknown"
+    if "/" not in repo_full_name and isinstance(repo_obj.get("owner"), dict):
+        owner = repo_obj["owner"].get("login") or repo_obj["owner"].get("name") or ""
+        if owner:
+            repo_full_name = f"{owner}/{repo_full_name}"
+    repository = repo_full_name
     branch = pull_request.get("head", {}).get("ref") or "main"
 
     changed_files = []

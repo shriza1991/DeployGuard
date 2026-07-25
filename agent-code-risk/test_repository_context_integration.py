@@ -76,7 +76,7 @@ class TestRepositoryContextIntegration(unittest.TestCase):
         # Verify post payload
         args, kwargs = mock_post.call_args
         json_data = kwargs["json"]
-        self.assertEqual(json_data["repository"], "DeployGuard")
+        self.assertEqual(json_data["repository"], "shriza1991/DeployGuard")
         self.assertEqual(json_data["branch"], "patch-auth")
         self.assertIn("gateway/main.py", json_data["changed_files"])
         self.assertIn("Fix auth vulnerability", json_data["pr_title"])
@@ -138,7 +138,7 @@ class TestRepositoryContextIntegration(unittest.TestCase):
             metrics=metrics
         )
 
-        self.assertEqual(context.repository, "DeployGuard")
+        self.assertEqual(context.repository, "shriza1991/DeployGuard")
         self.assertEqual(context.branch, "patch-auth")
         
         # Verify chunks capped at 10 and characters capped at 7000

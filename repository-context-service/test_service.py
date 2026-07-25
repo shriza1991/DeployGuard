@@ -482,9 +482,9 @@ def top_func():
                 "text": "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11"
             }
         }
-        score, reason = compute_ranking_score_and_reason(hit, ["gateway/redis.py"], {}, settings)
+        score, reason, *rest = compute_ranking_score_and_reason(hit, ["gateway/redis.py"], {}, settings)
         self.assertAlmostEqual(score, 0.80)
-        self.assertEqual(reason, "Exact changed file")
+        self.assertIn("modified", reason.lower())
 
         hit_test = {
             "score": 0.80,
@@ -496,9 +496,9 @@ def top_func():
                 "text": "def test_redis(): pass"
             }
         }
-        score_test, reason_test = compute_ranking_score_and_reason(hit_test, ["gateway/redis.py"], {}, settings)
+        score_test, reason_test, *rest = compute_ranking_score_and_reason(hit_test, ["gateway/redis.py"], {}, settings)
         self.assertAlmostEqual(score_test, 0.40)
-        self.assertEqual(reason_test, "Semantic similarity (Test file)")
+        self.assertIn("test", reason_test.lower())
         
     def test_framework_and_architecture_detection(self):
         from services.indexer import detect_frameworks_from_files, build_architecture_metadata

@@ -39,6 +39,9 @@ def fetch(payload: Dict[str, Any]) -> Tuple[List[RepositoryContextChunk], Dict[s
         return [], {}
 
     chunks: List[RepositoryContextChunk] = []
+    metrics = metrics or {}
+    metrics["evidence"] = raw_evidence or []
+
     for item in raw_evidence or []:
         if not isinstance(item, dict):
             continue
@@ -48,11 +51,11 @@ def fetch(payload: Dict[str, Any]) -> Tuple[List[RepositoryContextChunk], Dict[s
             lines=f"{meta.get('start_line', 0)}-{meta.get('end_line', 0)}",
             similarity=float(item.get("score") or 0.0),
             reason=_resolve_reason(item, meta),
-            text=str(item.get("text") or "")[:2000],  # cap per chunk
+            text=str(item.get("text") or item.get("snippet") or "")[:2000],  # cap per chunk
         )
         chunks.append(chunk)
 
-    return chunks, metrics or {}
+    return chunks, metrics
 
 
 def _resolve_reason(item: Dict[str, Any], meta: Dict[str, Any]) -> str:

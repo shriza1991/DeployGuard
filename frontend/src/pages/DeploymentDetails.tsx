@@ -94,29 +94,7 @@ function SimilarIncidentsTable({ incidents }: { incidents: any[] }) {
 function RepositoryEvidenceSection({ evidence }: { evidence?: any[] }) {
   const [expandedIndex, setExpandedIndex] = React.useState<number | null>(null);
 
-  // Fallback mock evidence if none is attached to demonstrate the UI
-  const displayEvidence = evidence && evidence.length > 0 ? evidence : [
-    {
-      relative_path: "gateway/redis.py",
-      filename: "redis.py",
-      score: 0.942,
-      ranking_score: 0.985,
-      retrieval_reason: "Matches exact import pattern in changed_file.py",
-      text: "class RedisStore:\n    def __init__(self, settings):\n        self.client = redis.Redis.from_url(settings.redis_url)\n        self.pool = ConnectionPool.from_url(settings.redis_url)\n\n    def get_connection(self):\n        return self.client.connection_pool.get_connection()",
-      start_line: 12,
-      end_line: 19
-    },
-    {
-      relative_path: "aggregator/kafka_consumer.py",
-      filename: "kafka_consumer.py",
-      score: 0.812,
-      ranking_score: 0.865,
-      retrieval_reason: "Import link in changed files list",
-      text: "class KafkaConsumer:\n    def __init__(self, broker_url, topic):\n        self.consumer = KafkaConsumer(\n            topic,\n            bootstrap_servers=[broker_url],\n            auto_offset_reset='earliest'\n        )",
-      start_line: 45,
-      end_line: 52
-    }
-  ];
+  const displayEvidence = Array.isArray(evidence) ? evidence : [];
 
   return (
     <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px' }}>
@@ -128,44 +106,78 @@ function RepositoryEvidenceSection({ evidence }: { evidence?: any[] }) {
         Semantic code snippets extracted by the Repository Context Service and injected into the AI's analysis reasoning.
       </p>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {displayEvidence.map((ev, idx) => {
-          const isExpanded = expandedIndex === idx;
-          return (
-            <div key={idx} style={{ border: '1px solid var(--panel-border)', borderRadius: '6px', overflow: 'hidden' }}>
-              <div 
-                onClick={() => setExpandedIndex(isExpanded ? null : idx)}
-                style={{ 
-                  background: 'rgba(255,255,255,0.01)', 
-                  padding: '12px 16px', 
-                  display: 'flex', 
-                  justifyContent: 'space-between', 
-                  alignItems: 'center',
-                  cursor: 'pointer' 
-                }}
-              >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>{ev.filename}</span>
-                  <span className="font-mono" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{ev.relative_path} · Score: {ev.score.toFixed(3)}</span>
+      {displayEvidence.length === 0 ? (
+        <div style={{ padding: '16px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--panel-border)', borderRadius: '6px', color: 'var(--text-muted)', fontSize: '12px' }}>
+          No semantic evidence was found for this repository.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {displayEvidence.map((ev, idx) => {
+            const isExpanded = expandedIndex === idx;
+            const repoName = ev.repository || ev.metadata?.repository || '';
+            const relPath = ev.relative_path || ev.metadata?.relative_path || ev.filename || ev.file || 'unknown';
+            const fileName = ev.filename || relPath.split('/').pop() || relPath;
+            const scoreVal = typeof ev.score === 'number' ? ev.score.toFixed(3) : '0.000';
+            const reasonStr = ev.reason_for_match || ev.retrieval_reason || ev.reason || 'Semantic match';
+            const snippetText = ev.snippet || ev.text || '';
+            const matchedSymbol = ev.matched_symbol || ev.metadata?.matched_symbol;
+            const matchedText = ev.matched_text || ev.metadata?.matched_text;
+
+            return (
+              <div key={idx} style={{ border: '1px solid var(--panel-border)', borderRadius: '6px', overflow: 'hidden' }}>
+                <div 
+                  onClick={() => setExpandedIndex(isExpanded ? null : idx)}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.01)', 
+                    padding: '12px 16px', 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center',
+                    cursor: 'pointer' 
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>{fileName}</span>
+                      {repoName && (
+                        <span className="font-mono" style={{ fontSize: '10px', color: 'var(--accent-cyan)', background: 'rgba(78,205,196,0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                          {repoName}
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-mono" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      {relPath} · Similarity: {scoreVal}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px' }}>
+                      {reasonStr}
+                    </span>
+                    {isExpanded ? <ChevronUp size={14} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px' }}>
-                    {ev.retrieval_reason || 'Semantic match'}
-                  </span>
-                  {isExpanded ? <ChevronUp size={14} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
-                </div>
+                {isExpanded && (
+                  <div style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--panel-border)', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {matchedSymbol && (
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11px', color: 'var(--accent-blue)' }}>
+                        <strong>Matched Symbol:</strong> <code className="font-mono" style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px' }}>{matchedSymbol}</code>
+                      </div>
+                    )}
+                    {matchedText && (
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        <strong>Matched Line:</strong> <code className="font-mono" style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px' }}>{matchedText}</code>
+                      </div>
+                    )}
+                    <pre className="font-mono" style={{ margin: 0, overflowX: 'auto', fontSize: '11px', color: '#a7a4cf', lineHeight: 1.5 }}>
+                      {snippetText}
+                    </pre>
+                  </div>
+                )}
               </div>
-              {isExpanded && (
-                <div style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--panel-border)', padding: '16px' }}>
-                  <pre className="font-mono" style={{ margin: 0, overflowX: 'auto', fontSize: '11px', color: '#a7a4cf', lineHeight: 1.5 }}>
-                    {ev.text}
-                  </pre>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

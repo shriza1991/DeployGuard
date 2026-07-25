@@ -142,21 +142,136 @@ def deduplicate_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         deduped.append(hit)
     return deduped
 
+def extract_symbols_and_imports(diff_str: str) -> tuple[List[str], List[str], List[str]]:
+    """
+    Extracts high-priority signals from diff text:
+    1. Function and class names
+    2. Import statements
+    3. Added and removed code lines (concise)
+    """
+    import re
+    funcs_classes: List[str] = []
+    imports: List[str] = []
+    code_changes: List[str] = []
+
+    func_class_regex = re.compile(r'^\+?\s*(?:def|class|function|const|let|var|type|interface)\s+([A-Za-z0-9_]+)')
+    import_regex = re.compile(r'^\+?\s*(?:from\s+[\w\.]+\s+import|import\s+[\w\.]+|const\s+.*=\s*require\([\'"][^\'"]+[\'"]\))')
+
+    for line in diff_str.splitlines():
+        line_strip = line.strip()
+        if not line_strip or line_strip.startswith(('+++', '---', '@@')):
+            continue
+
+        # Extract function/class definitions
+        m_fc = func_class_regex.search(line_strip)
+        if m_fc:
+            sym = m_fc.group(1)
+            if sym not in funcs_classes and len(sym) > 1:
+                funcs_classes.append(sym)
+
+        # Extract imports
+        if import_regex.search(line_strip):
+            if line_strip not in imports:
+                imports.append(line_strip[:120])
+
+        # Extract added/removed lines
+        if (line.startswith('+') or line.startswith('-')) and not line.startswith(('+++', '---')):
+            if len(code_changes) < 20:  # keep concise
+                code_changes.append(line[:120])
+
+    return funcs_classes, imports, code_changes
+
+
+def build_priority_semantic_query(body: ContextRequest) -> tuple[str, List[str]]:
+    """
+    Constructs a concise semantic query in strict priority order:
+    1. Changed function and class names
+    2. Changed imports
+    3. Added and removed code snippets
+    4. Changed file paths
+    5. PR title
+    6. PR description
+    """
+    funcs_classes, imports, code_changes = extract_symbols_and_imports(body.diff or "")
+
+    query_parts: List[str] = []
+
+    # Priority 1: Changed function and class names
+    if funcs_classes:
+        query_parts.append("Changed Symbols:\n" + ", ".join(funcs_classes))
+
+    # Priority 2: Changed imports
+    if imports:
+        query_parts.append("Changed Imports:\n" + "\n".join(imports[:10]))
+
+    # Priority 3: Added and removed code snippets
+    if code_changes:
+        query_parts.append("Code Diff Snippets:\n" + "\n".join(code_changes[:15]))
+
+    # Priority 4: Changed file paths
+    if body.changed_files:
+        query_parts.append("Changed Files:\n" + "\n".join(body.changed_files[:15]))
+
+    # Priority 5: PR title
+    if body.pr_title:
+        query_parts.append("PR Title: " + body.pr_title)
+
+    # Priority 6: PR description
+    if body.pr_description:
+        query_parts.append("PR Description: " + body.pr_description[:300])
+
+    query_str = "\n\n".join(query_parts).strip()
+    return query_str, funcs_classes
+
+
 def compute_ranking_score_and_reason(
     hit: Dict[str, Any],
     changed_files: List[str],
     dependency_graph: Dict[str, List[str]],
-    settings: Any
-) -> tuple[float, str]:
+    settings: Any,
+    extracted_symbols: List[str] | None = None
+) -> tuple[float, str, str, str]:
+    """
+    Computes ranking score and extracts matched_symbol, matched_text, and reason_for_match.
+    Returns: (ranking_score, reason_for_match, matched_symbol, matched_text)
+    """
+    extracted_symbols = extracted_symbols or []
     payload = hit.get("payload") or {}
     rel_path = payload.get("relative_path", "")
     filename = payload.get("filename", "")
     directory = payload.get("directory", "")
     kind = payload.get("kind", "")
     text = payload.get("text", "")
-    semantic_similarity = hit.get("score", 0.0)
+    semantic_similarity = float(hit.get("score", 0.0))
 
-    # 1. Exact match
+    # 1. Look for matched symbol & matched text inside chunk
+    matched_symbol = ""
+    matched_text = ""
+    for sym in extracted_symbols:
+        if sym in text:
+            matched_symbol = sym
+            # Find the line containing the symbol
+            for line in text.splitlines():
+                if sym in line:
+                    matched_text = line.strip()[:100]
+                    break
+            break
+
+    if not matched_symbol:
+        # Fallback symbol lookup from chunk text (def or class)
+        import re
+        m = re.search(r'(?:def|class|function|const)\s+([A-Za-z0-9_]+)', text)
+        if m:
+            matched_symbol = m.group(1)
+            for line in text.splitlines():
+                if matched_symbol in line:
+                    matched_text = line.strip()[:100]
+                    break
+
+    if not matched_text and text:
+        matched_text = text.splitlines()[0].strip()[:100]
+
+    # 2. Heuristics matching
     exact_match = 0.0
     if changed_files:
         for f in changed_files:
@@ -164,7 +279,6 @@ def compute_ranking_score_and_reason(
                 exact_match = 1.0
                 break
 
-    # 2. Same dir
     same_dir = 0.0
     if changed_files:
         for f in changed_files:
@@ -173,7 +287,6 @@ def compute_ranking_score_and_reason(
                 same_dir = 1.0
                 break
 
-    # 3. Same module or dependency link
     same_module = 0.0
     if changed_files:
         for f in changed_files:
@@ -182,7 +295,6 @@ def compute_ranking_score_and_reason(
             if len(changed_parts) > 1 and len(chunk_parts) > 1 and changed_parts[0] == chunk_parts[0]:
                 same_module = 1.0
                 break
-            
             if dependency_graph:
                 if f in dependency_graph and rel_path in dependency_graph[f]:
                     same_module = 1.0
@@ -191,27 +303,17 @@ def compute_ranking_score_and_reason(
                     same_module = 1.0
                     break
 
-    # 4. Is config
     is_config = 1.0 if kind == "configuration" or filename.lower() == "dockerfile" or os.path.splitext(filename)[1].lower() in (".tf", ".tfvars", ".yml", ".yaml", ".json") else 0.0
-
-    # 5. Is test
     is_test = 1.0 if kind == "test" or "test" in filename.lower() or "test" in rel_path.lower() else 0.0
 
-    # 6. Is mock
     is_mock = 0.0
     for term in ("mock", "seed", "fixture", "generated", "sample", "example"):
         if term in filename.lower() or term in rel_path.lower():
             is_mock = 1.0
             break
 
-    # 7. Tiny factor
     line_count = len(text.splitlines())
-    if line_count < 5:
-        tiny_factor = 1.0
-    elif line_count < 10:
-        tiny_factor = 0.5
-    else:
-        tiny_factor = 0.0
+    tiny_factor = 1.0 if line_count < 5 else (0.5 if line_count < 10 else 0.0)
 
     final_score = (
         (settings.weight_semantic * semantic_similarity) +
@@ -225,29 +327,32 @@ def compute_ranking_score_and_reason(
     )
     ranking_score = max(0.0, min(1.0, final_score))
 
-    # Determine reason
-    if exact_match == 1.0:
-        reason = "Exact changed file"
-    elif same_dir == 1.0:
-        reason = "Directory boost"
+    # Construct human-readable reason_for_match
+    if matched_symbol and exact_match == 1.0:
+        reason = f"Contains the '{matched_symbol}' implementation modified in this change."
+    elif matched_symbol:
+        reason = f"Defines or references the '{matched_symbol}' symbol referenced by the PR."
+    elif exact_match == 1.0:
+        reason = "Contains source code being modified in this pull request."
     elif same_module == 1.0:
-        reason = "Module/Dependency boost"
+        reason = "Imports or is imported by the modified code in this module."
+    elif same_dir == 1.0:
+        reason = "Defined in the same directory as the changed files."
     elif is_config == 1.0:
-        reason = "Configuration boost"
+        reason = "Infrastructure or configuration file related to changed services."
     elif is_test == 1.0:
-        reason = "Semantic similarity (Test file)"
-    elif is_mock == 1.0:
-        reason = "Semantic similarity (Mock file)"
+        reason = "Unit or integration test for the modified functionality."
     else:
-        reason = "Semantic similarity"
+        reason = "High semantic similarity to the modified code and PR context."
 
-    return ranking_score, reason
+    return ranking_score, reason, matched_symbol, matched_text
+
 
 @router.post("/repository/context")
 async def get_repository_context(request: Request, body: ContextRequest):
     """
     Primary endpoint for AI agents. Semantically retrieves relevant code/doc chunks
-    based on a list of changed files and a git diff, applying quality scoring heuristics.
+    strictly from the repository triggering the webhook.
     """
     try:
         state = getattr(request.app.state, "service_state", None)
@@ -287,15 +392,17 @@ async def get_repository_context(request: Request, body: ContextRequest):
         "total_request_latency_ms": 0.0
     }
 
+    # Strict repository isolation check
+    if not body.repository or not body.repository.strip():
+        logger.warning("Repository context skipped: repository parameter is missing or empty")
+        total_request_ms = (time.perf_counter() - t_start) * 1000
+        metrics["total_request_latency_ms"] = round(total_request_ms, 2)
+        metrics["repository_context_available"] = False
+        return {"results": [], "metrics": metrics}
+
     try:
         t_query_start = time.perf_counter()
-        query_parts = []
-        if body.changed_files:
-            query_parts.append("Changed files:\n" + "\n".join(body.changed_files))
-        if body.diff:
-            query_parts.append("Git diff:\n" + body.diff)
-
-        query_str = "\n\n".join(query_parts)
+        query_str, extracted_symbols = build_priority_semantic_query(body)
         t_query_end = time.perf_counter()
         query_construction_ms = (t_query_end - t_query_start) * 1000
         metrics["query_construction_latency_ms"] = round(query_construction_ms, 2)
@@ -336,7 +443,7 @@ async def get_repository_context(request: Request, body: ContextRequest):
                 t_fallback_start = time.perf_counter()
                 hits = qdrant_service.search(
                     vector=vector,
-                    repository=body.repository,
+                    repository=body.repository,   # MUST always include repository filter
                     branch=None,
                     top_k=settings.top_k_max
                 )
@@ -346,89 +453,108 @@ async def get_repository_context(request: Request, body: ContextRequest):
         metrics["search_latency_ms"] = round(search_latency_ms, 2)
         metrics["fallback_used"] = fallback_triggered
 
-        hits = [h for h in hits if h.get("score", 0.0) >= settings.min_similarity]
+        hits = [h for h in hits if float(h.get("score", 0.0)) >= settings.min_similarity]
 
         if settings.enable_deduplication:
             hits = deduplicate_hits(hits)
 
-        # 6. Quality scoring & ranking
+        # 6. Quality scoring, symbol extraction & ranking
         t_ranking_start = time.perf_counter()
         ranking_strategy = "semantic_similarity"
         
-        # Read dependency graph from Redis
         manifest = request.app.state.redis_service.get_manifest(body.repository, body.branch or "main")
         dependency_graph = manifest.dependency_graph if manifest else {}
 
         for h in hits:
-            if settings.enable_ranking:
-                ranking_strategy = "heuristics"
-                r_score, reason = compute_ranking_score_and_reason(
-                    h, body.changed_files, dependency_graph, settings
-                )
-            else:
-                r_score = h.get("score", 0.0)
-                reason = "Semantic similarity"
+            r_score, reason, symbol, snippet_line = compute_ranking_score_and_reason(
+                h, body.changed_files or [], dependency_graph, settings, extracted_symbols
+            )
             h["ranking_score"] = r_score
             h["retrieval_reason"] = reason
+            h["matched_symbol"] = symbol
+            h["matched_text"] = snippet_line
 
-        if settings.enable_ranking:
-            hits.sort(key=lambda h: h.get("ranking_score", 0.0), reverse=True)
-            
+        # Sort by ranking score descending (which combines semantic similarity & exact file boost)
+        hits.sort(key=lambda h: float(h.get("ranking_score", h.get("score", 0.0))), reverse=True)
+
         ranking_latency_ms = (time.perf_counter() - t_ranking_start) * 1000
         metrics["ranking_strategy"] = ranking_strategy
         metrics["ranking_latency_ms"] = round(ranking_latency_ms, 2)
 
-        hits = hits[:settings.top_k_default]
+        # Limit to top 5-10 highest-confidence chunks (default: 8)
+        max_chunks = min(settings.top_k_default, 10)
+        hits = hits[:max_chunks]
 
-        # 7. Prompt Assembly
+        # 7. Prompt Assembly & Payload formatting
         t_assembly_start = time.perf_counter()
         results = []
         for hit in hits:
             payload = hit.get("payload") or {}
             rel_path = payload.get("relative_path", "")
             chunk_index = payload.get("chunk_index", 0)
-            # Build a deterministic evidence ID that includes the commit SHA
-            # when available so results are traceable to a specific snapshot.
             stored_commit = payload.get("commit", "")
             request_commit = body.commit or stored_commit
             evidence_id = f"{body.repository}:{rel_path}:{chunk_index}"
             if request_commit:
                 evidence_id = f"{body.repository}:{request_commit}:{rel_path}:{chunk_index}"
             
+            start_line = payload.get("start_line", 0)
+            end_line = payload.get("end_line", 0)
+            matched_sym = hit.get("matched_symbol", "")
+            matched_txt = hit.get("matched_text", "")
+            reason_str = hit.get("retrieval_reason", "High semantic similarity to modified code.")
+
             results.append({
-                "score": hit.get("score", 0.0),
-                "ranking_score": hit.get("ranking_score", 0.0),
-                "retrieval_reason": hit.get("retrieval_reason", "Semantic similarity"),
-                "evidence_id": evidence_id,
+                "repository": payload.get("repository") or body.repository,
+                "branch": payload.get("branch") or body.branch,
+                "commit": payload.get("commit", "") or body.commit or "",
+                "relative_path": rel_path,
+                "filename": payload.get("filename", ""),
+                "score": float(hit.get("score", 0.0)),
+                "ranking_score": float(hit.get("ranking_score", 0.0)),
+                "matched_symbol": matched_sym,
+                "matched_text": matched_txt,
+                "reason_for_match": reason_str,
+                "retrieval_reason": reason_str,
+                "snippet": payload.get("text", ""),
                 "text": payload.get("text", ""),
+                "start_line": start_line,
+                "end_line": end_line,
+                "line_start": start_line,
+                "line_end": end_line,
+                "evidence_id": evidence_id,
                 "metadata": {
                     "repository": payload.get("repository") or body.repository,
                     "branch": payload.get("branch") or body.branch,
                     "commit": payload.get("commit", "") or body.commit or "",
                     "language": payload.get("language", ""),
-                    "relative_path": payload.get("relative_path", ""),
+                    "relative_path": rel_path,
                     "filename": payload.get("filename", ""),
                     "directory": payload.get("directory", ""),
-                    "chunk_index": payload.get("chunk_index", 0),
+                    "chunk_index": chunk_index,
                     "chunk_count": payload.get("chunk_count", 0),
-                    "start_line": payload.get("start_line", 0),
-                    "end_line": payload.get("end_line", 0),
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "line_start": start_line,
+                    "line_end": end_line,
                     "kind": payload.get("kind", ""),
-                    "last_indexed": payload.get("last_indexed", ""),
+                    "matched_symbol": matched_sym,
+                    "matched_text": matched_txt,
+                    "reason_for_match": reason_str,
+                    "retrieval_reason": reason_str,
                     "evidence_id": evidence_id,
-                    "retrieval_reason": hit.get("retrieval_reason", "Semantic similarity")
                 }
             })
         prompt_assembly_ms = (time.perf_counter() - t_assembly_start) * 1000
         metrics["prompt_assembly_latency_ms"] = round(prompt_assembly_ms, 2)
 
-        scores = [hit.get("score", 0.0) for hit in hits]
+        scores = [float(hit.get("score", 0.0)) for hit in hits]
         top_similarity = max(scores) if scores else 0.0
         average_similarity = sum(scores) / len(scores) if scores else 0.0
         retrieved_paths = [hit.get("payload", {}).get("relative_path", "") for hit in hits]
         unique_files = len(set(retrieved_paths))
 
-        metrics["repository_context_available"] = True
+        metrics["repository_context_available"] = len(results) > 0
         metrics["top_similarity"] = round(top_similarity, 4)
         metrics["average_similarity"] = round(average_similarity, 4)
         metrics["unique_files"] = unique_files
@@ -437,28 +563,19 @@ async def get_repository_context(request: Request, body: ContextRequest):
         total_request_ms = (time.perf_counter() - t_start) * 1000
         metrics["total_request_latency_ms"] = round(total_request_ms, 2)
 
-        logger.info("Repository Context Performance metrics:")
-        logger.info(f"Query construction: {round(query_construction_ms, 2)} ms")
-        logger.info(f"Embedding generation: {round(embedding_latency_ms, 2)} ms")
-        logger.info(f"Branch search: {round(t_branch_search_ms, 2)} ms")
-        logger.info(f"Fallback search: {round(t_fallback_search_ms, 2)} ms")
-        logger.info(f"Ranking: {round(ranking_latency_ms, 2)} ms")
-        logger.info(f"Prompt assembly: {round(prompt_assembly_ms, 2)} ms")
-        logger.info(f"Total request: {round(total_request_ms, 2)} ms")
-
-        # Rich logging
-        evidence_lines = "\n".join(retrieved_paths) if retrieved_paths else "None"
-        rich_log = (
-            f"Repository Context retrieval summary:\n"
-            f"Repository: {body.repository}\n"
-            f"Branch: {body.branch or 'None'}\n"
-            f"Commit: {body.commit or 'not provided'}\n"
-            f"Fallback: {'Yes' if fallback_triggered else 'No'}\n"
-            f"Chunks: {len(results)}\n"
-            f"Top Similarity: {round(top_similarity, 2)}\n"
-            f"Evidence paths:\n{evidence_lines}"
-        )
-        logger.info(rich_log)
+        # Verification debug logging
+        logger.info("=" * 70)
+        logger.info("[search] REPOSITORY CONTEXT RETRIEVAL DEBUG LOG:")
+        logger.info("  Repository          : %s", body.repository)
+        logger.info("  Branch              : %s", body.branch or "None")
+        logger.info("  Commit              : %s", body.commit or "not provided")
+        logger.info("  Clone URL           : %s", body.clone_url or "not provided")
+        logger.info("  Qdrant filter       : repository == %s", body.repository)
+        logger.info("  Query symbols       : %s", extracted_symbols)
+        logger.info("  Retrieved chunk count: %d", len(results))
+        logger.info("  Top similarity      : %.4f", top_similarity)
+        logger.info("  Returned file paths : %s", retrieved_paths)
+        logger.info("=" * 70)
 
         return {"results": results, "metrics": metrics}
 
@@ -466,3 +583,4 @@ async def get_repository_context(request: Request, body: ContextRequest):
         logger.error(f"Context retrieval failed: {e}", exc_info=True)
         metrics["repository_context_available"] = False
         return {"results": [], "metrics": metrics}
+

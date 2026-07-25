@@ -157,11 +157,16 @@ class QdrantService:
     def search(self, vector: List[float], repository: str, branch: str | None = None, top_k: int = 10) -> List[Dict[str, Any]]:
         """
         Searches the collection for closest vectors matching the repository and optional branch filters.
+        Strict repository isolation: repository parameter is mandatory and cannot be empty.
         """
+        if not repository or not repository.strip():
+            logger.warning("[qdrant-service] Mandatory repository filter missing/empty. Refusing to perform search.")
+            return []
+
         must_filters = [
             {
                 "key": "repository",
-                "match": {"value": repository}
+                "match": {"value": repository.strip()}
             }
         ]
         if branch:

@@ -79,26 +79,28 @@ def _extract_webhook_repo_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     # ── Repository identity ────────────────────────────────────────────────
     # Prefer full_name (e.g. "acme/my-service") over the short "name" field.
     # Both may be present; full_name is always unambiguous across organisations.
-    full_name = (
-        repo_obj.get("full_name")
-        or repo_obj.get("name")
-        or ""
-    )
+    full_name = repo_obj.get("full_name") or ""
+    if not full_name or "/" not in full_name:
+        owner = ""
+        if isinstance(repo_obj.get("owner"), dict):
+            owner = repo_obj["owner"].get("login") or repo_obj["owner"].get("name") or ""
+        elif isinstance(repo_obj.get("owner"), str):
+            owner = repo_obj["owner"]
 
-    # Derive full_name from the PR URL as a last resort
-    if not full_name and pull_request.get("url"):
-        parts = pull_request["url"].rstrip("/").split("/")
-        # GitHub PR URLs: https://api.github.com/repos/owner/repo/pulls/1
-        # or:             https://github.com/owner/repo/pull/1
-        try:
-            if "repos" in parts:
-                idx = parts.index("repos")
-                full_name = f"{parts[idx + 1]}/{parts[idx + 2]}"
-            elif "pull" in parts:
-                idx = parts.index("pull")
-                full_name = f"{parts[idx - 2]}/{parts[idx - 1]}"
-        except (IndexError, ValueError):
-            pass
+        repo_name = repo_obj.get("name") or full_name
+        if owner and repo_name:
+            full_name = f"{owner}/{repo_name}"
+        elif not full_name and pull_request.get("url"):
+            parts = pull_request["url"].rstrip("/").split("/")
+            try:
+                if "repos" in parts:
+                    idx = parts.index("repos")
+                    full_name = f"{parts[idx + 1]}/{parts[idx + 2]}"
+                elif "pull" in parts:
+                    idx = parts.index("pull")
+                    full_name = f"{parts[idx - 2]}/{parts[idx - 1]}"
+            except (IndexError, ValueError):
+                pass
 
     clone_url = repo_obj.get("clone_url") or ""
     default_branch = repo_obj.get("default_branch") or "main"
@@ -321,17 +323,18 @@ class RepositoryEvidenceProvider:
         metrics["repository_context_started_at"] = repo_context_started_iso
 
         index_status = _check_and_trigger_indexing(full_name, clone_url, branch, default_branch)
-        metrics["index_status"] = index_status
-
         if index_status == "indexing_in_progress":
+            metrics["index_status"] = "indexing"
+            metrics["repository_context_available"] = False
             logger.info(
                 "[code-risk] Skipping context retrieval for %s: indexing in progress. "
                 "Evidence will be available on the next webhook event.",
                 full_name
             )
-            metrics["repository_context_available"] = False
             _log_metrics(metrics)
             return [], metrics
+        else:
+            metrics["index_status"] = index_status
 
         # index_check_failed: fall through and attempt the search anyway —
         # the service may still have stale but useful vectors.

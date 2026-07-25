@@ -188,6 +188,7 @@ def to_aggregator_payload(review: ReviewResult, report: AnalysisReport) -> Dict[
             "repository": report.repository,
             "branch": report.branch,
             "commit": report.commit,
+            "evidence": (report.metrics.get("repository_evidence_metrics") or {}).get("evidence") or [],
             "repository_evidence_metrics": report.metrics.get("repository_evidence_metrics", {}),
             "inferred_capabilities": report.metrics.get("inferred_capabilities", []),
             "index_status": report.metrics.get("index_status", "unknown"),

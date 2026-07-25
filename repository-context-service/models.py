@@ -29,6 +29,9 @@ class ContextRequest(BaseModel):
     clone_url: Optional[str] = None
     # The repository default_branch from the webhook payload.
     default_branch: Optional[str] = None
+    pr_title: Optional[str] = ""
+    pr_description: Optional[str] = ""
+    commit_message: Optional[str] = ""
 
 class CodeChunkMetadata(BaseModel):
     repository: str

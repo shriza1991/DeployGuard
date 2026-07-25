@@ -73,7 +73,7 @@ def run_benchmarks(repository: str = "DeployGuard", branch: str = "main"):
         hits = qdrant_service.search(vector, repository, branch, top_k=settings.top_k_max)
         
         for h in hits:
-            ranking_score, reason = compute_ranking_score_and_reason(
+            ranking_score, reason, *rest = compute_ranking_score_and_reason(
                 h, expected, {}, settings
             )
             h["ranking_score"] = ranking_score
