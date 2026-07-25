@@ -66,6 +66,7 @@ services:
 
   gateway:
     build: ./gateway
+    image: shriza1991/deployguard-gateway:latest
     container_name: deployguard_gateway
     ports:
       - "8000:8000"
@@ -77,6 +78,7 @@ services:
 
   agent-code-risk:
     build: ./agent-code-risk
+    image: shriza1991/deployguard-agent-code-risk:latest
     container_name: deployguard_agent_code_risk
     depends_on:
       kafka:
@@ -89,6 +91,7 @@ services:
 
   agent-infra-risk:
     build: ./agent-infra-risk
+    image: shriza1991/deployguard-agent-infra-risk:latest
     container_name: deployguard_agent_infra_risk
     depends_on:
       kafka:
@@ -101,6 +104,7 @@ services:
 
   agent-incident-history:
     build: ./agent-incident-history
+    image: shriza1991/deployguard-agent-incident-history:latest
     container_name: deployguard_agent_incident_history
     depends_on:
       kafka:
@@ -111,6 +115,7 @@ services:
 
   aggregator:
     build: ./aggregator
+    image: shriza1991/deployguard-aggregator:latest
     container_name: deployguard_aggregator
     ports:
       - "8002:8002"
@@ -124,6 +129,7 @@ services:
       REDIS_URL: redis://redis:6379/0
 
   repository-context-service:
+    image: shriza1991/deployguard-repository-context:latest
     build: ./repository-context-service
     container_name: deployguard_repository_context_service
 
