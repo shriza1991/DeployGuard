@@ -23,9 +23,31 @@ class DiffFile(BaseModel):
     language: str = "generic"          # set by language_classifier
     additions: int = 0
     deletions: int = 0
+    changes: int = 0
     patch: str = ""
     functions_modified: List[str] = Field(default_factory=list)
     imports_added: List[str] = Field(default_factory=list)
+
+    @property
+    def added_lines(self) -> int:
+        return self.additions
+
+    @property
+    def removed_lines(self) -> int:
+        return self.deletions
+
+    @property
+    def changed_lines(self) -> int:
+        return self.changes or (self.additions + self.deletions)
+
+    @property
+    def modified_functions(self) -> List[str]:
+        return self.functions_modified
+
+    @property
+    def imports(self) -> List[str]:
+        return self.imports_added
+
 
 
 class SecurityFinding(BaseModel):

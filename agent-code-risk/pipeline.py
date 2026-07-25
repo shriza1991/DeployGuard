@@ -55,15 +55,12 @@ def _run_phase1(payload: Dict[str, Any]):
     from analysis import diff_parser, language_classifier
     from analysis.detectors import run_all_detectors
     from analysis import repository_correlator
-    from risk_analyzers import analyze_code_risk, build_analysis_context
+    from risk_analyzers import analyze_code_risk, build_analysis_context, extract_github_pr_identifiers
 
     # =========================================================================
-    # STEP 1 — Build enriched analysis context (fetches GitHub file patches)
+    # STEP 1 — Extract PR Identifiers & Build Enriched Analysis Context
     # =========================================================================
-    # build_analysis_context() calls fetch_pull_request_files() which hits
-    # GET /repos/{owner}/{repo}/pulls/{n}/files to retrieve the actual unified
-    # diff for each changed file.  Without this step, patches are empty because
-    # GitHub webhook payloads do not include patch text.
+    owner, repo_name, pr_number, pr_url = extract_github_pr_identifiers(payload)
     context = build_analysis_context(payload)
 
     enriched_files: List[Dict[str, Any]] = context.get("changed_files") or []
@@ -72,7 +69,8 @@ def _run_phase1(payload: Dict[str, Any]):
     repo_obj = payload.get("repository") or {}
 
     repository = (
-        repo_obj.get("full_name") or repo_obj.get("name") or ""
+        repo_obj.get("full_name")
+        or (f"{owner}/{repo_name}" if owner and repo_name else repo_obj.get("name") or "unknown")
     )
     branch = (
         (pull_request.get("head") or {}).get("ref")
@@ -81,16 +79,13 @@ def _run_phase1(payload: Dict[str, Any]):
     )
     commit = head_commit.get("id") or head_commit.get("sha") or ""
 
-    # =========================================================================
-    # STRUCTURED LOGGING — Phase 1 intake
-    # =========================================================================
     files_with_patch = [f for f in enriched_files if f.get("patch")]
     files_without_patch = [f for f in enriched_files if not f.get("patch")]
 
     total_additions = sum(int(f.get("additions") or 0) for f in enriched_files)
     total_deletions = sum(int(f.get("deletions") or 0) for f in enriched_files)
 
-    # Count added lines from patch text if additions metadata missing
+    # Count added/removed lines from patch text if metadata missing
     if total_additions == 0 and total_deletions == 0:
         for f in enriched_files:
             patch = str(f.get("patch") or "")
@@ -100,61 +95,10 @@ def _run_phase1(payload: Dict[str, Any]):
                 elif line.startswith("-") and not line.startswith("---"):
                     total_deletions += 1
 
-    logger.info("=" * 70)
-    logger.info("[phase1] DIFF INTAKE REPORT")
-    logger.info("  Repository   : %s", repository or "(unknown)")
-    logger.info("  Branch       : %s", branch)
-    logger.info("  Commit       : %s", commit[:12] if commit else "(unknown)")
-    logger.info("  PR URL       : %s", pull_request.get("url", "(none)"))
-    logger.info("  Files received from build_analysis_context : %d", len(enriched_files))
-    logger.info("  Files with patch text                      : %d", len(files_with_patch))
-    logger.info("  Files without patch (binary or empty)      : %d", len(files_without_patch))
-    logger.info("  Total added lines (+ prefix)               : %d", total_additions)
-    logger.info("  Total removed lines (- prefix)             : %d", total_deletions)
-
-    if enriched_files and (total_additions + total_deletions) == 0:
-        logger.warning(
-            "[phase1] WARNING: %d file(s) received but changed_lines = 0. "
-            "Patches are empty — GitHub API fetch may have failed (check GITHUB_TOKEN) "
-            "or all changed files are binary. Detectors will produce no findings.",
-            len(enriched_files),
-        )
-
-    if files_without_patch:
-        logger.warning(
-            "[phase1] Files with no patch text (binary/empty — skipped by detectors): %s",
-            [f.get("filename") for f in files_without_patch],
-        )
-
-    for f in files_with_patch:
-        patch = str(f.get("patch") or "")
-        adds = sum(1 for l in patch.splitlines() if l.startswith("+") and not l.startswith("+++"))
-        dels = sum(1 for l in patch.splitlines() if l.startswith("-") and not l.startswith("---"))
-        logger.info(
-            "[phase1]   %s  status=%s  +%d/-%d lines  patch_bytes=%d",
-            f.get("filename"), f.get("status", "?"), adds, dels, len(patch),
-        )
-
-    logger.info("=" * 70)
-
     # =========================================================================
     # STEP 2 — Parse enriched file list into structured DiffFile objects
     # =========================================================================
-    # parse_files() accepts the GitHub file dicts WITH patch text.
-    # Do NOT call parse(payload) here — the raw payload has no patch text.
     diff_files = diff_parser.parse_files(enriched_files)
-
-    logger.info("[phase1] diff_parser produced %d DiffFile objects", len(diff_files))
-    for df in diff_files:
-        logger.info(
-            "[phase1]   DiffFile: %s  language=%-16s  +%d/-%d  "
-            "patch_bytes=%d  functions=%s  imports=%s",
-            df.filename, df.language,
-            df.additions, df.deletions,
-            len(df.patch),
-            df.functions_modified[:5] or [],
-            df.imports_added[:5] or [],
-        )
 
     # =========================================================================
     # STEP 3 — Classify languages
@@ -165,38 +109,50 @@ def _run_phase1(payload: Dict[str, Any]):
     for df in diff_files:
         lang_counts[df.language] = lang_counts.get(df.language, 0) + 1
 
-    logger.info("[phase1] Language breakdown: %s", lang_counts)
-
     # =========================================================================
     # STEP 4 — Run language-specific detectors
     # =========================================================================
     new_findings: list[SecurityFinding] = []
-    detector_log: Dict[str, int] = {}   # detector_name -> finding count
+    detector_log: Dict[str, int] = {}
 
     for df in diff_files:
-        before = len(new_findings)
         findings_for_file = run_all_detectors(df)
         new_findings.extend(findings_for_file)
         count = len(findings_for_file)
         detector_log[df.filename] = count
 
-        logger.info(
-            "[phase1]   detector(%s/%s): %d finding(s)",
-            df.language, df.filename, count,
-        )
-        for finding in findings_for_file:
-            logger.info(
-                "[phase1]     -> %s [%s] at line %s  matched: %r",
-                finding.rule_id,
-                finding.severity,
-                finding.line_number,
-                finding.matched_text[:80],
-            )
+    detectors_executed = sorted(list(set(df.language for df in diff_files)))
 
-    logger.info(
-        "[phase1] DETECTOR SUMMARY: %d total findings across %d files",
-        len(new_findings), len(diff_files),
-    )
+    # =========================================================================
+    # STRUCTURED DEBUG LOGGING — Phase 1 Intake & Execution
+    # =========================================================================
+    logger.info("=" * 70)
+    logger.info("[phase1] DEBUG LOGGING:")
+    logger.info("  Repository               : %s", repository)
+    logger.info("  PR Number                : %s", pr_number if pr_number is not None else "(none)")
+    logger.info("  Files returned by GitHub : %d", len(enriched_files))
+    logger.info("  Files containing patches : %d", len(files_with_patch))
+    logger.info("  Files parsed             : %d", len(diff_files))
+    logger.info("  Total additions          : %d", total_additions)
+    logger.info("  Total deletions          : %d", total_deletions)
+    logger.info("  Detectors executed       : %s", detectors_executed)
+    logger.info("  Findings produced        : %d", len(new_findings))
+    logger.info("=" * 70)
+
+    if len(enriched_files) > 0 and len(files_with_patch) == 0:
+        logger.warning(
+            "[phase1] EXPLICIT WARNING: Deterministic security analysis cannot proceed to inspect source code diffs because patch data is missing! "
+            "GitHub returned %d file(s) for repository '%s' PR #%s, but 0 files contained a unified diff patch string. "
+            "Possible reasons: (1) GitHub API rate limit or authentication required (check GITHUB_TOKEN), "
+            "(2) Changed files are all binary or empty, (3) The PR contains no line changes. "
+            "Detectors require patch content to analyze code changes rather than repository metadata.",
+            len(enriched_files), repository, pr_number
+        )
+    elif len(enriched_files) == 0:
+        logger.warning(
+            "[phase1] EXPLICIT WARNING: Deterministic security analysis cannot proceed because no changed files were returned for repository '%s' PR #%s.",
+            repository, pr_number
+        )
 
     # =========================================================================
     # STEP 5 — Run legacy risk_analyzers for score/severity/confidence

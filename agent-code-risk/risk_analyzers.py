@@ -416,19 +416,64 @@ def _iter_changed_lines(context: dict[str, Any]):
                 yield file_name, line
 
 
-def fetch_pull_request_files(pr_url: str) -> list[dict[str, Any]]:
-    if not GITHUB_TOKEN or not pr_url:
+def extract_github_pr_identifiers(payload: dict[str, Any]) -> tuple[str, str, Any, str]:
+    """Extract owner, repo_name, pull_number, and pr_url from a GitHub webhook payload."""
+    repo_obj = payload.get("repository") or {}
+    pr_obj = payload.get("pull_request") or {}
+
+    owner = ""
+    if isinstance(repo_obj.get("owner"), dict):
+        owner = repo_obj["owner"].get("login") or repo_obj["owner"].get("name") or ""
+    full_name = repo_obj.get("full_name") or ""
+    if not owner and "/" in full_name:
+        owner = full_name.split("/")[0]
+
+    repo_name = repo_obj.get("name") or ""
+    if not repo_name and "/" in full_name:
+        repo_name = full_name.split("/")[1]
+
+    pull_number = pr_obj.get("number") or payload.get("number")
+    pr_url = pr_obj.get("url") or ""
+
+    return owner, repo_name, pull_number, pr_url
+
+
+def fetch_pull_request_files_from_api(
+    owner: str = "",
+    repo: str = "",
+    pull_number: Any = None,
+    pr_url: str = ""
+) -> list[dict[str, Any]]:
+    """Fetch PR files from GitHub REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}/files"""
+    files_url = None
+    if owner and repo and pull_number:
+        files_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/files"
+    elif pr_url:
+        files_url = pr_url.rstrip("/") + "/files"
+
+    if not files_url:
         return []
 
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    files_url = pr_url.rstrip("/") + "/files"
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "DeployGuard-Agent/1.0"
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+
     try:
         response = requests.get(files_url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return []
-        return response.json()
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                return data
+        return []
     except requests.RequestException:
         return []
+
+
+def fetch_pull_request_files(pr_url: str) -> list[dict[str, Any]]:
+    return fetch_pull_request_files_from_api(pr_url=pr_url)
 
 
 def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -445,10 +490,18 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(payload.get("diffs"), list):
         files.extend(payload.get("diffs", []))
 
-    if isinstance(pr, dict) and pr.get("url"):
-        fetched_files = fetch_pull_request_files(pr.get("url", ""))
+    # Check if files already have non-empty patch text
+    has_patches = any(isinstance(f, dict) and bool(f.get("patch")) for f in files)
+
+    owner, repo_name, pr_number, pr_url = extract_github_pr_identifiers(payload)
+
+    if not has_patches:
+        fetched_files = fetch_pull_request_files_from_api(
+            owner=owner, repo=repo_name, pull_number=pr_number, pr_url=pr_url
+        )
         if fetched_files:
             files = fetched_files
+            payload["changed_files"] = files
 
     raw_cf = payload.get("changed_files")
     if isinstance(raw_cf, list):

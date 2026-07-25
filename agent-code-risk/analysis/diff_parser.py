@@ -75,18 +75,20 @@ def _parse_entry(entry: Dict[str, Any]) -> DiffFile:
     status = _normalise_status(str(entry.get("status", "modified")))
     additions = int(entry.get("additions") or 0)
     deletions = int(entry.get("deletions") or 0)
+    changes = int(entry.get("changes") or (additions + deletions))
     patch = str(entry.get("patch") or "")
 
     functions_modified = _extract_functions(filename, patch)
     imports_added = _extract_imports(filename, patch)
 
-    # If additions/deletions weren't provided, count them from the patch
+    # If additions/deletions/changes weren't provided, count them from the patch
     if additions == 0 and deletions == 0 and patch:
         for line in patch.splitlines():
             if line.startswith("+") and not line.startswith("+++"):
                 additions += 1
             elif line.startswith("-") and not line.startswith("---"):
                 deletions += 1
+        changes = additions + deletions
 
     return DiffFile(
         filename=filename,
@@ -94,10 +96,12 @@ def _parse_entry(entry: Dict[str, Any]) -> DiffFile:
         language="generic",            # populated by language_classifier
         additions=additions,
         deletions=deletions,
+        changes=changes,
         patch=patch,
         functions_modified=functions_modified,
         imports_added=imports_added,
     )
+
 
 
 def _normalise_status(raw: str) -> str:
