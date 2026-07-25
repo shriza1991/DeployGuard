@@ -8,8 +8,7 @@ import threading
 
 from kafka import KafkaConsumer, KafkaProducer
 
-from llm_reasoner import LLMReasoner
-from risk_analyzers import analyze_code_risk
+from pipeline import run_analysis_pipeline
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 INPUT_TOPIC = "deployment-events"
@@ -32,7 +31,9 @@ consumer = KafkaConsumer(
     value_deserializer=lambda m: json.loads(m.decode("utf-8")),
 )
 
-reasoner = LLMReasoner()
+# Pipeline replaces the old two-step analyze_code_risk + LLMReasoner flow.
+# run_analysis_pipeline() runs Phase 1 (deterministic) then Phase 2 (LLM review)
+# and returns an aggregator-compatible dict.
 
 # Stats tracking
 STATS = {
@@ -171,19 +172,29 @@ for msg in consumer:
     start_run = time.perf_counter()
     confidence_val = 0.0
     try:
-        analysis = analyze_code_risk(payload)
-        llm_result = reasoner.reason_about_change(payload, analysis)
-        confidence_val, confidence_factors = calculate_agent_confidence(payload, analysis, llm_result)
+        # ── Two-phase pipeline ─────────────────────────────────────────────────
+        # Phase 1: deterministic analysis (diff parser + language classifiers + detectors)
+        # Phase 2: LLM review (Gemini receives AnalysisReport, never raw payload)
+        pipeline_result = run_analysis_pipeline(payload)
+
+        confidence_val, confidence_factors = calculate_agent_confidence(
+            payload,
+            pipeline_result,         # pipeline_result has same keys as old 'analysis'
+            {                        # synthetic llm_result for backward-compat scorer
+                "confidence": (pipeline_result.get("llm") or {}).get("confidence", 0.0),
+                "available": (pipeline_result.get("llm") or {}).get("available", False),
+            },
+        )
 
         completed_time_sec = time.time()
         completed_at_iso = datetime.datetime.fromtimestamp(completed_time_sec, datetime.timezone.utc).isoformat()
         latency_ms = round((time.perf_counter() - start_run) * 1000.0, 2)
 
-        repo_metrics = (analysis.get("metadata") or {}).get("repository_evidence_metrics") or {}
+        repo_metrics = pipeline_result.get("metadata", {}).get("repository_evidence_metrics") or {}
         repo_ctx_ms = repo_metrics.get("retrieval_latency_ms", 0.0)
 
         meta = {
-            **analysis["metadata"],
+            **pipeline_result.get("metadata", {}),
             "confidence_factors": confidence_factors,
             "started_at": started_at_iso,
             "completed_at": completed_at_iso,
@@ -191,27 +202,34 @@ for msg in consumer:
             "repository_context_ms": repo_ctx_ms,
         }
 
+        llm_block = pipeline_result.get("llm") or {}
+
         output = {
             "agent": "code-risk",
             "correlation_id": correlation_id,
-            "score": analysis["score"],
-            "severity": analysis["severity"],
+            "score": pipeline_result["score"],
+            "severity": pipeline_result["severity"],
             "confidence": confidence_val,
             "confidence_factors": confidence_factors,
-            "reasons": analysis["reasons"],
-            "recommendations": analysis["recommendations"],
+            "reasons": pipeline_result["reasons"],
+            "recommendations": pipeline_result["recommendations"],
             "started_at": started_at_iso,
             "completed_at": completed_at_iso,
             "duration_ms": latency_ms,
             "metadata": meta,
             "llm": {
-                "provider": llm_result.get("provider"),
-                "available": llm_result.get("available", False),
-                "summary": llm_result.get("summary"),
-                "risk_reasoning": llm_result.get("risk_reasoning", []),
-                "recommendations": llm_result.get("recommendations", []),
-                "confidence": llm_result.get("confidence", 0.0),
+                "provider": llm_block.get("provider"),
+                "available": llm_block.get("available", False),
+                "summary": llm_block.get("summary"),
+                "risk_reasoning": llm_block.get("risk_reasoning", []),
+                "recommendations": llm_block.get("recommendations", []),
+                "confidence": llm_block.get("confidence", 0.0),
             },
+            # Additive Phase 2 fields (ignored by current aggregator, available for frontend)
+            "deployment_decision": pipeline_result.get("deployment_decision", "REVIEW"),
+            "finding_analyses": pipeline_result.get("finding_analyses", []),
+            "ai_observations": pipeline_result.get("ai_observations", []),
+            "confidence_rationale": pipeline_result.get("confidence_rationale", ""),
         }
         producer.send(OUTPUT_TOPIC, output)
         producer.flush()

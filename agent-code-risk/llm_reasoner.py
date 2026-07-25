@@ -1,3 +1,12 @@
+"""
+llm_reasoner.py — Backward-compatibility shim.
+
+The two-phase pipeline (pipeline.py) replaces this module as the primary
+analysis entry point in app.py.  This shim exists only to preserve imports
+in existing unit tests (test_llm_reasoner.py).
+
+DO NOT use this module for new code — use pipeline.run_analysis_pipeline() instead.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -6,107 +15,73 @@ import logging
 import time
 from typing import Any
 
-import requests
-
 from llm.factory import get_provider
-from llm.prompt_builder import build_prompt
-
-from repository_context_client import RepositoryEvidenceProvider
-from llm.context_assembly import assemble_context
 
 logger = logging.getLogger("code-risk-llm")
 
 
 class LLMReasoner:
-    """Wraps LLM provider execution and normalizes provider results."""
+    """
+    Backward-compatible shim.
+
+    In the new two-phase architecture this class is no longer called from app.py.
+    It is kept here so existing tests that import LLMReasoner continue to pass.
+
+    Internally it now delegates to the Phase 2 reviewer when a full payload is
+    available, or falls back to a structured default response.
+    """
 
     def __init__(self, provider: Any | None = None, cache_ttl_seconds: int = 300):
         self.provider = provider or get_provider()
         self.cache_ttl_seconds = cache_ttl_seconds
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
-    def reason_about_change(self, payload: dict[str, Any], deterministic_result: dict[str, Any]) -> dict[str, Any]:
-        # 1. Retrieve repository evidence and metrics (runs AFTER deterministic risk analyzers)
-        raw_evidence, metrics = RepositoryEvidenceProvider.get_repository_evidence(payload)
-        logger.info("Length of raw evidence: %s", len(raw_evidence))
-        logger.info("Metrics: %s", metrics)
+    def reason_about_change(
+        self,
+        payload: dict[str, Any],
+        deterministic_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Legacy interface.  Runs a lightweight Phase 2 review from raw payload.
 
-        # 2. Attach metrics to the metadata of the deterministic result
-        if "metadata" not in deterministic_result or not isinstance(deterministic_result["metadata"], dict):
-            deterministic_result["metadata"] = {}
-        deterministic_result["metadata"]["repository_evidence_metrics"] = metrics
-        logger.info("Metadata object: %s", deterministic_result["metadata"])
+        Prefer pipeline.run_analysis_pipeline(payload) for new call sites.
+        """
+        from pipeline import _run_phase1, _run_phase2
 
-        # 3. Assemble structured context
-        assembled_context = assemble_context(payload, deterministic_result, raw_evidence, metrics)
-
-        # 4. Format prompt
-        prompt = build_prompt(assembled_context)
-
-        # 5. Check cache and execute
         cache_key = self._cache_key(payload, deterministic_result)
         cached = self._cache.get(cache_key)
         if cached and time.time() - cached[0] < self.cache_ttl_seconds:
-            logger.info("LLM cache hit for payload")
+            logger.info("LLM cache hit (shim path)")
             return cached[1]
 
-        logger.info("LLM prompt generated")
-        response = self._generate_with_retries(prompt)
+        try:
+            report = _run_phase1(payload)
+            result = _run_phase2(report)
+            # Extract LLM sub-dict for backward compat
+            llm_block = result.get("llm") or {}
+            response = {
+                "summary": llm_block.get("summary", ""),
+                "risk_reasoning": llm_block.get("risk_reasoning", []),
+                "recommendations": llm_block.get("recommendations", []),
+                "confidence": llm_block.get("confidence", 0.0),
+                "provider": llm_block.get("provider", "unavailable"),
+                "available": llm_block.get("available", False),
+            }
+        except Exception as exc:
+            logger.warning("LLMReasoner shim failed: %s", exc)
+            response = _default_response(provider_name=getattr(self.provider, "name", "unavailable"))
+
         self._cache[cache_key] = (time.time(), response)
         return response
 
-    def _generate_with_retries(self, prompt: str) -> dict[str, Any]:
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                logger.info("LLM request started using provider %s", getattr(self.provider, "name", "unknown"))
-                response = self.provider.analyze(prompt)
-                logger.info("LLM response received from provider %s", getattr(self.provider, "name", "unknown"))
-                return _normalize_response(response, provider_name=getattr(self.provider, "name", "unknown"))
-            except (requests.Timeout, requests.HTTPError, requests.ConnectionError, ValueError, json.JSONDecodeError, ImportError) as exc:
-                last_error = exc
-                logger.warning("LLM request failed (attempt %s/3): %s", attempt + 1, exc)
-            except Exception as exc:
-                last_error = exc
-                logger.warning("Unexpected LLM error (attempt %s/3): %s", attempt + 1, exc)
-
-            if attempt < 2:
-                time.sleep(0.5 * (attempt + 1))
-
-        logger.warning("LLM reasoning unavailable after retries: %s", last_error)
-        return _default_response(provider_name=getattr(self.provider, "name", "unavailable"))
-
-    def _cache_key(self, payload: dict[str, Any], deterministic_result: dict[str, Any]) -> str:
-        stable_payload = {
-            "payload": payload,
-            "deterministic": deterministic_result,
-        }
-        encoded = json.dumps(stable_payload, sort_keys=True, default=str).encode("utf-8")
+    def _cache_key(
+        self,
+        payload: dict[str, Any],
+        deterministic_result: dict[str, Any],
+    ) -> str:
+        stable = {"payload": payload, "deterministic": deterministic_result}
+        encoded = json.dumps(stable, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
-
-
-def _extract_changed_files(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    changed_files = payload.get("files")
-    if isinstance(changed_files, list):
-        return [file_entry for file_entry in changed_files if isinstance(file_entry, dict)]
-    return []
-
-
-def _normalize_response(response: dict[str, Any], provider_name: str) -> dict[str, Any]:
-    if not isinstance(response, dict):
-        raise ValueError("LLM response was not a JSON object")
-
-    normalized = {
-        "summary": str(response.get("summary") or "Deterministic analysis reviewed with conservative AI context."),
-        "risk_reasoning": [str(item) for item in response.get("risk_reasoning", []) if str(item).strip()],
-        "recommendations": [str(item) for item in response.get("recommendations", []) if str(item).strip()],
-        "confidence": float(response.get("confidence", 0.0) or 0.0),
-        "provider": provider_name,
-        "available": bool(response.get("available", True)),
-    }
-
-    normalized["confidence"] = max(0.0, min(1.0, normalized["confidence"]))
-    return normalized
 
 
 def _default_response(provider_name: str = "unavailable") -> dict[str, Any]:
@@ -117,4 +92,21 @@ def _default_response(provider_name: str = "unavailable") -> dict[str, Any]:
         "confidence": 0.0,
         "provider": provider_name,
         "available": False,
+    }
+
+
+def _normalize_response(raw: dict[str, Any], provider_name: str = "unknown") -> dict[str, Any]:
+    """
+    Backward-compat normalizer for existing unit tests.
+
+    Accepts a raw dict (as the old LLMReasoner would have received from the LLM)
+    and returns a stable output shape with all expected keys populated.
+    """
+    return {
+        "summary": str(raw.get("summary") or ""),
+        "risk_reasoning": list(raw.get("risk_reasoning") or []),
+        "recommendations": list(raw.get("recommendations") or []),
+        "confidence": float(raw.get("confidence") or 0.0),
+        "provider": str(provider_name),
+        "available": bool(raw.get("available", False)),
     }
