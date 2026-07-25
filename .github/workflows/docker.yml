@@ -75,4 +75,18 @@ jobs:
 
             docker compose up -d
 
+            until curl -sf http://localhost:8003/readiness > /dev/null; do
+            echo "Waiting for repository-context-service..."
+            sleep 2
+            done
+
+
+
+            curl -X POST http://localhost:8003/repository/index \
+            -H "Content-Type: application/json" \
+            -d '{
+            "repository_url":"https://github.com/shriza1991/DeployGuard.git",
+            "branch":"main"
+            }'
+
             docker image prune -af
