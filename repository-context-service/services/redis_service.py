@@ -32,6 +32,7 @@ class RedisService:
     def save_status(self, repository: str, branch: str, status: RepoStatus) -> None:
         """Saves repository indexing status to Redis."""
         key = self._status_key(repository, branch)
+        logger.info(f"Redis status save key: {key}")
         try:
             self.client.set(key, status.model_dump_json())
             logger.info(f"Saved repository status in Redis under key: {key}")
@@ -41,6 +42,7 @@ class RedisService:
     def get_status(self, repository: str, branch: str) -> Optional[RepoStatus]:
         """Retrieves repository indexing status from Redis."""
         key = self._status_key(repository, branch)
+        logger.info(f"Redis status lookup key: {key}")
         try:
             data = self.client.get(key)
             if data:

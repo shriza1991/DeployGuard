@@ -28,7 +28,7 @@ async def index_repository(request: Request, body: IndexRequest, background_task
     return {"status": "started"}
 
 
-@router.get("/repository/status/{repository}", response_model=RepoStatus)
+@router.get("/repository/status/{repository:path}", response_model=RepoStatus)
 async def get_repository_status(request: Request, repository: str, branch: str = Query("main")):
     """
     Checks the indexing status of a repository in Redis.
@@ -39,7 +39,7 @@ async def get_repository_status(request: Request, repository: str, branch: str =
         return RepoStatus(status="not_indexed", branch=branch)
     return status
 
-@router.get("/repository/manifest/{repository}", response_model=RepoManifest)
+@router.get("/repository/manifest/{repository:path}", response_model=RepoManifest)
 async def get_repository_manifest(request: Request, repository: str, branch: str = Query("main")):
     """
     Retrieves the detected technology manifest for a repository.
@@ -53,7 +53,7 @@ async def get_repository_manifest(request: Request, repository: str, branch: str
         )
     return manifest
 
-@router.delete("/repository/index/{repository}")
+@router.delete("/repository/index/{repository:path}")
 async def delete_repository_index(request: Request, repository: str, branch: str = Query("main")):
     """
     Purges all repository points from Qdrant and clears status/manifest details from Redis.
@@ -73,7 +73,7 @@ async def delete_repository_index(request: Request, repository: str, branch: str
         logger.error(f"Error purging repository data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/repository/stats/{repository}", response_model=RepoStats)
+@router.get("/repository/stats/{repository:path}", response_model=RepoStats)
 async def get_repository_stats(
     request: Request,
     repository: str,
