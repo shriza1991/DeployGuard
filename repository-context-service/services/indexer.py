@@ -465,6 +465,7 @@ class Indexer:
 
         logger.info("Incremental Indexing Performance Metrics:")
         logger.info(f"chunks indexed: {len(chunks_to_embed)}")
+        logger.info(f"total chunk count: {len(all_chunks)}")
         logger.info(f"repository size: {repository_size_bytes} bytes")
         logger.info(f"chunk generation latency: {int(chunk_generation_latency)} ms")
         logger.info(f"embedding latency: {int(embedding_latency)} ms")
@@ -625,6 +626,7 @@ class Indexer:
 
         logger.info("Full Indexing Performance Metrics:")
         logger.info(f"chunks indexed: {len(all_chunks)}")
+        logger.info(f"total chunk count: {len(all_chunks)}")
         logger.info(f"repository size: {repository_size_bytes} bytes")
         logger.info(f"chunk generation latency: {int(chunk_generation_latency)} ms")
         logger.info(f"embedding latency: {int(embedding_latency)} ms")

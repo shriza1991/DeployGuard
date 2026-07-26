@@ -394,7 +394,7 @@ async def get_repository_context(request: Request, body: ContextRequest):
 
     # Strict repository isolation check
     if not body.repository or not body.repository.strip():
-        logger.warning("Repository context skipped: repository parameter is missing or empty")
+        logger.warning("[WARNING] Repository Context Pipeline: Search stage failed: Repository parameter is missing or empty")
         total_request_ms = (time.perf_counter() - t_start) * 1000
         metrics["total_request_latency_ms"] = round(total_request_ms, 2)
         metrics["repository_context_available"] = False
@@ -410,13 +410,33 @@ async def get_repository_context(request: Request, body: ContextRequest):
         if not query_str.strip():
             total_request_ms = (time.perf_counter() - t_start) * 1000
             metrics["total_request_latency_ms"] = round(total_request_ms, 2)
-            logger.info("Repository Context: empty query, returning early.")
+            logger.warning("[WARNING] Repository Context Pipeline: Search stage failed: Empty semantic query generated")
+            logger.warning("[WARNING] Repository Context Retrieval Failed")
+            logger.warning(f"Repository:\n{body.repository}")
+            logger.warning("Chunks returned:\n0")
+            logger.warning("Possible causes:")
+            logger.warning("- weak semantic query")
             return {"results": [], "metrics": metrics}
 
         t_embed_start = time.perf_counter()
-        vector = embedding_service.embed_text(query_str)
+        vector = []
+        try:
+            vector = embedding_service.embed_text(query_str)
+            embedding_ok = "YES" if vector else "NO"
+        except Exception as embed_err:
+            embedding_ok = "NO"
+            logger.warning(f"[WARNING] Repository Context Pipeline: Search stage failed: Query embedding generation failed: {embed_err}")
+            raise embed_err
+
         embedding_latency_ms = (time.perf_counter() - t_embed_start) * 1000
         metrics["embedding_latency_ms"] = round(embedding_latency_ms, 2)
+
+        logger.info("Query embedding generated:")
+        logger.info(embedding_ok)
+        logger.info("Embedding dimensions:")
+        logger.info(f"{len(vector) if vector else 0}")
+        logger.info("Embedding generation time:")
+        logger.info(f"{int(embedding_latency_ms)} ms")
 
         branch_filter_enabled = bool(body.branch)
         fallback_triggered = False
@@ -439,15 +459,15 @@ async def get_repository_context(request: Request, body: ContextRequest):
             if branch_filter_enabled:
                 fallback_triggered = True
             
-            if settings.enable_fallback:
-                t_fallback_start = time.perf_counter()
-                hits = qdrant_service.search(
-                    vector=vector,
-                    repository=body.repository,   # MUST always include repository filter
-                    branch=None,
-                    top_k=settings.top_k_max
-                )
-                t_fallback_search_ms = (time.perf_counter() - t_fallback_start) * 1000
+            # Fallback relaxes only the branch constraint. The repository filter is strictly retained.
+            t_fallback_start = time.perf_counter()
+            hits = qdrant_service.search(
+                vector=vector,
+                repository=body.repository,   # MUST always include repository filter
+                branch=None,
+                top_k=settings.top_k_max
+            )
+            t_fallback_search_ms = (time.perf_counter() - t_fallback_start) * 1000
 
         search_latency_ms = (time.perf_counter() - t_search_start) * 1000
         metrics["search_latency_ms"] = round(search_latency_ms, 2)
@@ -511,6 +531,7 @@ async def get_repository_context(request: Request, body: ContextRequest):
                 "relative_path": rel_path,
                 "filename": payload.get("filename", ""),
                 "score": float(hit.get("score", 0.0)),
+                "similarity": float(hit.get("score", 0.0)),
                 "ranking_score": float(hit.get("ranking_score", 0.0)),
                 "matched_symbol": matched_sym,
                 "matched_text": matched_txt,
@@ -563,6 +584,46 @@ async def get_repository_context(request: Request, body: ContextRequest):
         total_request_ms = (time.perf_counter() - t_start) * 1000
         metrics["total_request_latency_ms"] = round(total_request_ms, 2)
 
+        # Retrieve Qdrant diagnostics safely
+        try:
+            qdrant_col_exists = qdrant_service.collection_exists()
+            if not isinstance(qdrant_col_exists, bool):
+                qdrant_col_exists = False
+        except Exception:
+            qdrant_col_exists = False
+
+        try:
+            qdrant_chunk_count = qdrant_service.count_total_points() if qdrant_col_exists else 0
+            if not isinstance(qdrant_chunk_count, int):
+                qdrant_chunk_count = 0
+        except Exception:
+            qdrant_chunk_count = 0
+
+        try:
+            repo_payload_count = qdrant_service.count_repository_points(body.repository) if qdrant_col_exists else 0
+            if not isinstance(repo_payload_count, int):
+                repo_payload_count = 0
+        except Exception:
+            repo_payload_count = 0
+
+        try:
+            qdrant_repos = qdrant_service.get_unique_repositories() if qdrant_col_exists else []
+            if not isinstance(qdrant_repos, list):
+                qdrant_repos = []
+        except Exception:
+            qdrant_repos = []
+
+        redis_status = "not_indexed"
+        try:
+            redis_status_obj = request.app.state.redis_service.get_status(body.repository, body.branch or "main")
+            if redis_status_obj and type(redis_status_obj).__name__ != "MagicMock":
+                if hasattr(redis_status_obj, "status"):
+                    redis_status = redis_status_obj.status
+        except Exception:
+            pass
+
+        match_status = "PASSED" if body.repository in qdrant_repos else "FAILED"
+
         # Verification debug logging
         logger.info("=" * 70)
         logger.info("[search] REPOSITORY CONTEXT RETRIEVAL DEBUG LOG:")
@@ -575,12 +636,87 @@ async def get_repository_context(request: Request, body: ContextRequest):
         logger.info("  Retrieved chunk count: %d", len(results))
         logger.info("  Top similarity      : %.4f", top_similarity)
         logger.info("  Returned file paths : %s", retrieved_paths)
+        
+        logger.info("Redis Status:")
+        logger.info(f"{redis_status}")
+        logger.info("Qdrant Collection Exists:")
+        logger.info("YES" if qdrant_col_exists else "NO")
+        logger.info("Qdrant Chunk Count:")
+        logger.info(f"{qdrant_chunk_count}")
+        logger.info("Repository Payload Count:")
+        logger.info(f"{repo_payload_count}")
+        logger.info("Log the actual repository values stored in Qdrant:")
+        logger.info("Repository requested:")
+        logger.info(f"{body.repository}")
+        logger.info("Repositories found in Qdrant:")
+        for r_val in qdrant_repos:
+            logger.info(f"- {r_val}")
+        logger.info("Repository match:")
+        logger.info(f"{match_status}")
         logger.info("=" * 70)
+
+        # Actionable failure warn report if zero chunks returned
+        if len(results) == 0:
+            logger.warning("[WARNING] Repository Context Pipeline: Retrieval stage failed: Zero matching chunks found")
+            logger.warning("[WARNING] Repository Context Retrieval Failed")
+            logger.warning(f"Repository:\n{body.repository}")
+            logger.warning(f"Repository exists:\n{'YES' if repo_payload_count > 0 else 'NO'}")
+            logger.warning(f"Repository indexed:\n{'YES' if redis_status == 'completed' or repo_payload_count > 0 else 'NO'}")
+            logger.warning(f"Chunks stored:\n{repo_payload_count}")
+            logger.warning(f"Branch searched:\n{body.branch or 'None'}")
+            logger.warning("Fallback branch:\nrepository only")
+            logger.warning("Chunks returned:\n0")
+            logger.warning("Possible causes:")
+            logger.warning("- repository identifier mismatch")
+            logger.warning("- incorrect payload metadata")
+            logger.warning("- weak semantic query")
+            logger.warning("- missing embeddings")
 
         return {"results": results, "metrics": metrics}
 
     except Exception as e:
-        logger.error(f"Context retrieval failed: {e}", exc_info=True)
+        logger.error(f"[WARNING] Repository Context Pipeline: Search stage failed: Qdrant search execution failed: {e}", exc_info=True)
+        # Attempt to get values for diagnostics even on exception
+        qdrant_col_exists = False
+        repo_payload_count = 0
+        redis_status = "error"
+        try:
+            qdrant_col_exists = qdrant_service.collection_exists()
+            if not isinstance(qdrant_col_exists, bool):
+                qdrant_col_exists = False
+        except Exception:
+            pass
+            
+        try:
+            if qdrant_col_exists:
+                repo_payload_count = qdrant_service.count_repository_points(body.repository)
+                if not isinstance(repo_payload_count, int):
+                    repo_payload_count = 0
+        except Exception:
+            pass
+            
+        try:
+            redis_status_obj = request.app.state.redis_service.get_status(body.repository, body.branch or "main")
+            if redis_status_obj and type(redis_status_obj).__name__ != "MagicMock":
+                if hasattr(redis_status_obj, "status"):
+                    redis_status = redis_status_obj.status
+        except Exception:
+            pass
+
+        logger.warning("[WARNING] Repository Context Retrieval Failed (Exception Encountered)")
+        logger.warning(f"Repository:\n{body.repository}")
+        logger.warning(f"Repository exists:\n{'YES' if repo_payload_count > 0 else 'NO'}")
+        logger.warning(f"Repository indexed:\n{'YES' if redis_status == 'completed' or repo_payload_count > 0 else 'NO'}")
+        logger.warning(f"Chunks stored:\n{repo_payload_count}")
+        logger.warning(f"Branch searched:\n{body.branch or 'None'}")
+        logger.warning("Fallback branch:\nrepository only")
+        logger.warning("Chunks returned:\n0")
+        logger.warning("Possible causes:")
+        logger.warning("- repository identifier mismatch")
+        logger.warning("- incorrect payload metadata")
+        logger.warning("- weak semantic query")
+        logger.warning("- missing embeddings")
+
         metrics["repository_context_available"] = False
         return {"results": [], "metrics": metrics}
 

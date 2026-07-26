@@ -31,8 +31,21 @@ def get_repo_full_name(url: str) -> str:
     Falls back to the short repo name when the URL has no recognisable
     owner segment (e.g. bare file paths or single-component paths).
     """
-    # Normalise SSH-style URLs (git@github.com:owner/repo.git) to a path
+    # Prefer Git remote origin if the path is a local Git directory
     url_clean = url.strip()
+    if os.path.isdir(url_clean) and os.path.exists(os.path.join(url_clean, ".git")):
+        try:
+            repo = git.Repo(url_clean)
+            origin_remote = next((r for r in repo.remotes if r.name == "origin"), None)
+            if origin_remote and origin_remote.url:
+                return get_repo_full_name(origin_remote.url)
+            elif repo.remotes and repo.remotes[0].url:
+                return get_repo_full_name(repo.remotes[0].url)
+        except Exception as e:
+            logger.warning(f"Failed to check Git remote in local directory {url_clean}: {e}")
+
+    # Normalise backslashes and SSH-style URLs
+    url_clean = url_clean.replace("\\", "/")
     if url_clean.startswith("git@"):
         # git@github.com:owner/repo.git  →  owner/repo.git
         url_clean = url_clean.split(":", 1)[-1]

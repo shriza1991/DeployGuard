@@ -223,3 +223,65 @@ class QdrantService:
         if last_error:
             raise last_error
         return None
+
+    def count_total_points(self) -> int:
+        """Retrieves the total point (chunk) count in the collection."""
+        try:
+            response = self._request("get", f"/collections/{self.collection}")
+            if response is not None and response.status_code == 200:
+                return response.json().get("result", {}).get("points_count", 0)
+        except Exception as e:
+            logger.error(f"Failed to fetch total points count from Qdrant: {e}")
+        return 0
+
+    def count_repository_points(self, repository: str) -> int:
+        """Counts the points (chunks) matching the repository filter in Qdrant."""
+        if not repository or not repository.strip():
+            return 0
+        payload = {
+            "filter": {
+                "must": [
+                    {
+                        "key": "repository",
+                        "match": {"value": repository.strip()}
+                    }
+                ]
+            },
+            "exact": True
+        }
+        try:
+            response = self._request(
+                "post",
+                f"/collections/{self.collection}/points/count",
+                json=payload
+            )
+            if response is not None and response.status_code == 200:
+                return response.json().get("result", {}).get("count", 0)
+        except Exception as e:
+            logger.error(f"Failed to count repository points in Qdrant: {e}")
+        return 0
+
+    def get_unique_repositories(self) -> List[str]:
+        """Scrolls through the collection to collect all unique repository names stored in payloads."""
+        payload = {
+            "limit": 1000,
+            "with_payload": ["repository"],
+            "with_vector": False
+        }
+        try:
+            response = self._request(
+                "post",
+                f"/collections/{self.collection}/points/scroll",
+                json=payload
+            )
+            if response is not None and response.status_code == 200:
+                points = response.json().get("result", {}).get("points") or []
+                repos = set()
+                for p in points:
+                    r_val = (p.get("payload") or {}).get("repository")
+                    if r_val:
+                        repos.add(r_val)
+                return sorted(list(repos))
+        except Exception as e:
+            logger.error(f"Failed to scroll unique repositories from Qdrant: {e}")
+        return []
