@@ -163,10 +163,12 @@ def _check_and_trigger_indexing(
     Checks the indexing status for *full_name* in the Repository Context
     Service and, when the repository has never been indexed, triggers
     background indexing via the existing ``POST /repository/index`` endpoint.
+    Then, polls the status endpoint to wait for completion.
 
     Returns one of:
         "ready"               – indexed and completed, safe to search
         "indexing_in_progress" – indexing is currently running (or was just triggered)
+        "failed"              – indexing failed
         "index_check_failed"  – could not reach the status endpoint
     """
     # URL-encode the full_name so slashes don't break the path segment
@@ -174,68 +176,95 @@ def _check_and_trigger_indexing(
     encoded_name = urllib.parse.quote(full_name, safe="")
     status_url = f"{REPOSITORY_CONTEXT_URL}/repository/status/{encoded_name}"
 
-    try:
-        res = requests.get(status_url, params={"branch": branch}, timeout=5.0)
-        if res.status_code != 200:
-            logger.warning(
-                "[code-risk] Could not retrieve index status for %s (HTTP %s)",
-                full_name, res.status_code
-            )
+    def get_status() -> str:
+        try:
+            res = requests.get(status_url, params={"branch": default_branch}, timeout=5.0)
+            if res.status_code == 404:
+                return "not_indexed"
+            elif res.status_code != 200:
+                return "index_check_failed"
+            data = res.json()
+            return data.get("status", "not_indexed")
+        except Exception as exc:
+            logger.warning("[code-risk] Failed to check index status for %s: %s", full_name, exc)
             return "index_check_failed"
 
-        data = res.json()
-        status = data.get("status", "not_indexed")
-
-    except Exception as exc:
-        logger.warning("[code-risk] Failed to check index status for %s: %s", full_name, exc)
+    status = get_status()
+    if status == "index_check_failed":
         return "index_check_failed"
 
-    if status == "completed":
-        logger.info("[code-risk] Repository %s (branch: %s) is indexed and ready.", full_name, branch)
+    if status in ("completed", "indexed"):
+        logger.info("[code-risk] Repository %s (branch: %s) is indexed and ready.", full_name, default_branch)
         return "ready"
 
+    # Verify repository being indexed is target repository and never DeployGuard unless triggered
+    if "deployguard-risk-lab" in full_name:
+        logger.info("[code-risk] Verification: indexing canonical repository '%s'", full_name)
+    elif full_name == "DeployGuard":
+        logger.warning("[code-risk] WARNING: indexing repository '%s'", full_name)
+    else:
+        logger.info("[code-risk] Verification: indexing repository '%s'", full_name)
+
+    if status in ("not_indexed", "failed"):
+        logger.info("Repository not indexed.")
+        logger.info("Triggering indexing...")
+
+        # Use clone_url when available; derive a best-effort HTTPS URL from full_name otherwise.
+        effective_clone_url = clone_url or f"https://github.com/{full_name}.git"
+
+        index_body = {
+            "repository_url": effective_clone_url,
+            "clone_url": effective_clone_url,
+            "branch": default_branch,          # index the default branch
+            "repository_full_name": full_name,  # authoritative identifier
+        }
+
+        try:
+            idx_res = requests.post(
+                f"{REPOSITORY_CONTEXT_URL}/repository/index",
+                json=index_body,
+                timeout=5.0,
+            )
+            if idx_res.status_code == 202:
+                logger.info("Repository indexing accepted.")
+                status = "indexing"
+            else:
+                logger.warning(
+                    "[code-risk] Index trigger returned unexpected status %s for %s.",
+                    idx_res.status_code, full_name
+                )
+                return "index_check_failed"
+        except Exception as exc:
+            logger.warning("[code-risk] Failed to trigger indexing for %s: %s", full_name, exc)
+            return "index_check_failed"
+
+    # Now poll the status endpoint for a short period
     if status == "indexing":
-        logger.info(
-            "[code-risk] Repository %s (branch: %s) is currently being indexed.",
-            full_name, branch
-        )
-        return "indexing_in_progress"
+        max_poll_time = 30.0
+        poll_interval = 2.5
+        elapsed = 0.0
 
-    # status == "not_indexed" or anything unexpected — trigger indexing
-    logger.info(
-        "[code-risk] Repository %s (branch: %s) not yet indexed (status=%r). "
-        "Triggering background indexing now.",
-        full_name, branch, status
-    )
-
-    # Use clone_url when available; derive a best-effort HTTPS URL from full_name otherwise.
-    effective_clone_url = clone_url or f"https://github.com/{full_name}.git"
-
-    index_body = {
-        "repository_url": effective_clone_url,
-        "clone_url": effective_clone_url,
-        "branch": default_branch,          # index the default branch
-        "repository_full_name": full_name,  # authoritative identifier
-    }
-
-    try:
-        idx_res = requests.post(
-            f"{REPOSITORY_CONTEXT_URL}/repository/index",
-            json=index_body,
-            timeout=5.0,
-        )
-        if idx_res.status_code == 202:
+        while elapsed < max_poll_time:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            current_status = get_status()
             logger.info(
-                "[code-risk] Indexing triggered for %s (branch: %s).",
-                full_name, default_branch
+                "[code-risk] Polling repository %s indexing status: %s (elapsed: %.1fs)",
+                full_name, current_status, elapsed
             )
-        else:
-            logger.warning(
-                "[code-risk] Index trigger returned unexpected status %s for %s.",
-                idx_res.status_code, full_name
-            )
-    except Exception as exc:
-        logger.warning("[code-risk] Failed to trigger indexing for %s: %s", full_name, exc)
+
+            if current_status in ("completed", "indexed"):
+                logger.info("[code-risk] Repository %s indexing completed successfully.", full_name)
+                return "ready"
+            elif current_status == "failed":
+                logger.warning("[WARNING] Repository Context Pipeline: Indexing stage failed for repository %s", full_name)
+                return "failed"
+            elif current_status == "index_check_failed":
+                # status check failed during polling, ignore and continue
+                pass
+
+        logger.warning("[code-risk] Repository %s indexing did not complete within %.1fs", full_name, max_poll_time)
+        return "indexing_in_progress"
 
     return "indexing_in_progress"
 
@@ -331,6 +360,12 @@ class RepositoryEvidenceProvider:
                 "Evidence will be available on the next webhook event.",
                 full_name
             )
+            _log_metrics(metrics)
+            return [], metrics
+        elif index_status == "failed":
+            metrics["index_status"] = "failed"
+            metrics["repository_context_available"] = False
+            logger.warning("[WARNING] Repository Context Pipeline: Indexing failed for repository %s", full_name)
             _log_metrics(metrics)
             return [], metrics
         else:
