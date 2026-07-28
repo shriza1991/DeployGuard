@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch, MagicMock
 
 from risk_analyzers import analyze_infra_risk, _classify_file
 
@@ -55,6 +56,91 @@ class InfraRiskAnalyzerTests(unittest.TestCase):
         self.assertIn("GHA_UNPINNED_ACTION", rule_ids)
         self.assertIn("DOCKER_ROOT_USER", rule_ids)
         self.assertIn("COMPOSE_PRIVILEGED", rule_ids)
+        self.assertIn("K8S_PRIVILEGED", rule_ids)
+        self.assertIn("TF_PUBLIC_S3", rule_ids)
+        self.assertGreater(analysis["score"], 50)
+
+    @patch("requests.get")
+    def test_raw_github_webhook_api_fetching_integration(self, mock_requests_get):
+        """Integration test: Raw GitHub pull_request webhook payload (no embedded file objects)
+
+        Triggers GitHub API fetch (GET /repos/{owner}/{repo}/pulls/{number}/files) and verifies
+        that Docker, Kubernetes, Terraform, GitHub Actions, and Docker Compose files reach InfraFileRouter.
+        """
+        raw_github_webhook_payload = {
+            "action": "opened",
+            "number": 42,
+            "pull_request": {
+                "number": 42,
+                "title": "infra: update all container and IaC configs",
+                "body": "Raw webhook event from GitHub without embedded files array",
+                "changed_files": 5,
+                "url": "https://api.github.com/repos/myorg/myrepo/pulls/42",
+            },
+            "repository": {
+                "name": "myrepo",
+                "full_name": "myorg/myrepo",
+                "owner": {"login": "myorg"},
+            },
+        }
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {
+                "filename": "docker/Dockerfile",
+                "status": "modified",
+                "patch": "+ FROM python:3.11-slim\n+ USER root",
+            },
+            {
+                "filename": "docker/docker-compose.yml",
+                "status": "modified",
+                "patch": "+   privileged: true",
+            },
+            {
+                "filename": ".github/workflows/ci.yml",
+                "status": "modified",
+                "patch": "+     uses: actions/checkout@main",
+            },
+            {
+                "filename": "kubernetes/deployment.yaml",
+                "status": "modified",
+                "patch": "+   containers:\n+     - name: app\n+       securityContext:\n+         privileged: true",
+            },
+            {
+                "filename": "terraform/main.tf",
+                "status": "modified",
+                "patch": '+   acl = "public-read"',
+            },
+        ]
+        mock_requests_get.return_value = mock_response
+
+        analysis = analyze_infra_risk(raw_github_webhook_payload)
+        metadata = analysis.get("metadata", {})
+
+        # Verify GitHub API was called with GET /repos/myorg/myrepo/pulls/42/files
+        mock_requests_get.assert_called_once()
+        call_url = mock_requests_get.call_args[0][0]
+        self.assertEqual(call_url, "https://api.github.com/repos/myorg/myrepo/pulls/42/files")
+
+        # Verify InfraFileRouter received all 5 files from the API call
+        self.assertEqual(metadata.get("infra_files_analyzed"), 5)
+        analyzed_files = metadata.get("infra_files", [])
+        expected_files = [
+            "docker/Dockerfile",
+            "docker/docker-compose.yml",
+            ".github/workflows/ci.yml",
+            "kubernetes/deployment.yaml",
+            "terraform/main.tf",
+        ]
+        for ef in expected_files:
+            self.assertIn(ef, analyzed_files)
+
+        # Verify detectors executed and emitted rule findings for each file
+        rule_ids = {f["rule_id"] for f in analysis.get("deterministic_findings", [])}
+        self.assertIn("DOCKER_ROOT_USER", rule_ids)
+        self.assertIn("COMPOSE_PRIVILEGED", rule_ids)
+        self.assertIn("GHA_UNPINNED_ACTION", rule_ids)
         self.assertIn("K8S_PRIVILEGED", rule_ids)
         self.assertIn("TF_PUBLIC_S3", rule_ids)
         self.assertGreater(analysis["score"], 50)

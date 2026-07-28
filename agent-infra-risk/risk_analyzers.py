@@ -15,19 +15,22 @@ Key design principles
 """
 from __future__ import annotations
 
+import os
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Any
+
+import requests
 
 from infra_risk.analyzers import ANALYZERS, dedupe_findings
 from infra_risk.analyzers.base import Finding
 
-
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 logger = logging.getLogger("infra-risk-agent.analyzers")
 
 
-from pathlib import Path
 
 
 def _classify_file(filename: str) -> tuple[bool, list[str], str, str]:
@@ -112,6 +115,62 @@ _ANALYZER_BY_NAME: dict[str, Any] = {a.name: a for a in ANALYZERS}
 
 
 
+def extract_github_pr_identifiers(payload: dict[str, Any]) -> tuple[str, str, Any, str]:
+    """Extract owner, repo_name, pull_number, and pr_url from a GitHub webhook payload."""
+    repo_obj = payload.get("repository") or {}
+    pr_obj = payload.get("pull_request") or {}
+
+    owner = ""
+    if isinstance(repo_obj.get("owner"), dict):
+        owner = repo_obj["owner"].get("login") or repo_obj["owner"].get("name") or ""
+    full_name = repo_obj.get("full_name") or ""
+    if not owner and "/" in full_name:
+        owner = full_name.split("/")[0]
+
+    repo_name = repo_obj.get("name") or ""
+    if not repo_name and "/" in full_name:
+        repo_name = full_name.split("/")[1]
+
+    pull_number = pr_obj.get("number") or payload.get("number") or payload.get("pr_number")
+    pr_url = pr_obj.get("url") or ""
+
+    return owner, repo_name, pull_number, pr_url
+
+
+def fetch_pull_request_files_from_api(
+    owner: str = "",
+    repo: str = "",
+    pull_number: Any = None,
+    pr_url: str = ""
+) -> list[dict[str, Any]]:
+    """Fetch PR files from GitHub REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}/files"""
+    files_url = None
+    if owner and repo and pull_number:
+        files_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/files"
+    elif pr_url:
+        files_url = pr_url.rstrip("/") + "/files"
+
+    if not files_url:
+        return []
+
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "DeployGuard-Agent/1.0"
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+
+    try:
+        response = requests.get(files_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                return data
+        return []
+    except requests.RequestException:
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Context builder
 # ---------------------------------------------------------------------------
@@ -156,6 +215,22 @@ def _build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     for src in sources:
         if isinstance(src, list):
             for item in src:
+                norm = _normalize_item(item)
+                if norm and norm["filename"] not in seen_files:
+                    seen_files.add(norm["filename"])
+                    files.append(norm)
+
+    # Check if files already have non-empty patch text
+    has_patches = any(isinstance(f, dict) and bool(f.get("patch")) for f in files)
+
+    # If payload lacks files or patches, attempt GitHub API fetch
+    if not files or not has_patches:
+        owner, repo_name, pr_number, pr_url = extract_github_pr_identifiers(payload)
+        fetched_files = fetch_pull_request_files_from_api(
+            owner=owner, repo=repo_name, pull_number=pr_number, pr_url=pr_url
+        )
+        if fetched_files:
+            for item in fetched_files:
                 norm = _normalize_item(item)
                 if norm and norm["filename"] not in seen_files:
                     seen_files.add(norm["filename"])
