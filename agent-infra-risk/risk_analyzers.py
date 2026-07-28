@@ -345,6 +345,18 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
             started_at=started_at,
         )
 
+    # ── DIAG 2: inputs handed to InfraFileRouter ───────────────────────────
+    _router_input_names = [
+        str(fe.get("filename") or fe.get("file_path") or "<unknown>")
+        for fe in files
+    ]
+    logger.debug(
+        "[infra-risk][diag] InfraFileRouter input — "
+        "total_changed_files=%d files=%s",
+        len(_router_input_names), _router_input_names,
+    )
+    # ─────────────────────────────────────────────────────────────────────────
+
     # ── Route each changed file to its analyzer(s) ───────────────────────────
     findings: list[Finding] = []
     infra_files_seen: list[str] = []
@@ -385,6 +397,14 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
     findings = dedupe_findings(findings)
 
     infra_file_count = len(infra_files_seen)
+
+    # ── DIAG 3: InfraFileRouter output ────────────────────────────────────
+    logger.debug(
+        "[infra-risk][diag] InfraFileRouter output — "
+        "infra_file_count=%d infra_files=%s",
+        infra_file_count, infra_files_seen,
+    )
+    # ─────────────────────────────────────────────────────────────────────────
 
     # ── No infra files detected ───────────────────────────────────────────────
     if infra_file_count == 0:

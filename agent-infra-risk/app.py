@@ -161,6 +161,23 @@ for msg in consumer:
     correlation_id = event.get("correlation_id") if isinstance(event, dict) else None
     logger.info("[infra-risk] received event %s", correlation_id)
 
+    # ── DIAG 1: PR files as received from the GitHub API payload ─────────────
+    _diag_pr = (payload.get("pull_request") or {})
+    _diag_pr_number = _diag_pr.get("number") or payload.get("pr_number") or payload.get("pull_request_number")
+    _diag_repo = (payload.get("repository") or {}).get("full_name") or (payload.get("repository") or {}).get("name")
+    _diag_raw_files = [
+        f for src in ("files", "changed_files", "diffs")
+        for f in (payload.get(src) or [])
+        if isinstance(f, dict)
+    ]
+    _diag_filenames = [str(f.get("filename") or f.get("file_path") or "<unknown>") for f in _diag_raw_files]
+    logger.debug(
+        "[infra-risk][diag] GitHub API files received — "
+        "pr=%s repo=%s file_count=%d files=%s",
+        _diag_pr_number, _diag_repo, len(_diag_filenames), _diag_filenames,
+    )
+    # ─────────────────────────────────────────────────────────────────────────
+
     start_time_sec = time.time()
     started_at_iso = datetime.datetime.fromtimestamp(start_time_sec, datetime.timezone.utc).isoformat()
     start_run = time.perf_counter()
