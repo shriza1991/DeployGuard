@@ -27,69 +27,89 @@ from infra_risk.analyzers.base import Finding
 logger = logging.getLogger("infra-risk-agent.analyzers")
 
 
-# ---------------------------------------------------------------------------
-# Infrastructure file classification
-# ---------------------------------------------------------------------------
+from pathlib import Path
 
-# Each entry: (compiled regex, list-of-analyzer-names)
-# Analyzers are matched by their `name` attribute.
-_INFRA_FILE_PATTERNS: list[tuple[re.Pattern[str], list[str]]] = [
-    # Dockerfiles
-    (re.compile(r"(?:^|/)Dockerfile(?:\.\w+)?$", re.IGNORECASE), ["docker"]),
-    (re.compile(r"\.dockerfile$", re.IGNORECASE), ["docker"]),
 
-    # Docker Compose
-    (re.compile(r"(?:^|/)docker-compose(?:[.\-]\w+)?\.ya?ml$", re.IGNORECASE), ["docker_compose"]),
+def _classify_file(filename: str) -> tuple[bool, list[str], str, str]:
+    """
+    Path-aware classification of filenames to infrastructure categories and analyzers.
+    Returns: (is_infra_file, analyzer_names, category, display_name_or_skip_reason)
+    """
+    if not filename or filename in ("<unknown>", "<diff>"):
+        return False, [], "unknown", "invalid filename"
 
-    # Terraform
-    (re.compile(r"\.tf$", re.IGNORECASE), ["terraform"]),
-    (re.compile(r"\.tfvars$", re.IGNORECASE), ["terraform"]),
+    # Normalize slashes for cross-platform / Windows path compatibility
+    norm_path = filename.replace("\\", "/").lower().strip()
+    path_obj = Path(norm_path)
+    basename = path_obj.name
+    parent_parts = [p.lower() for p in path_obj.parts[:-1]]
 
-    # GitHub Actions
-    (re.compile(r"\.github/workflows/[^/]+\.ya?ml$", re.IGNORECASE), ["github_actions"]),
+    # 1. Dockerfile (e.g. Dockerfile, docker/Dockerfile, Dockerfile.dev, ci.dockerfile)
+    if basename == "dockerfile" or basename.startswith("dockerfile.") or basename.endswith(".dockerfile"):
+        return True, ["docker"], "docker", "Docker analyzer"
 
-    # Kubernetes / Helm
-    (re.compile(r"(?:^|/)(?:deployment|service|ingress|statefulset|daemonset|"
-                r"job|cronjob|configmap|pod|replicaset|namespace|rbac|"
-                r"clusterrole|clusterrolebinding|rolebinding|networkpolicy|"
-                r"hpa|pvc|pv|storageclass|serviceaccount|"
-                r"Chart|values)\.ya?ml$", re.IGNORECASE), ["kubernetes"]),
-    (re.compile(r"(?:^|/)templates/[^/]+\.ya?ml$", re.IGNORECASE), ["kubernetes"]),  # Helm templates
+    # 2. Docker Compose (e.g. docker-compose.yml, docker/docker-compose.yaml, compose.yml, docker-compose.prod.yml)
+    if (basename.startswith("docker-compose") or basename.startswith("compose")) and basename.endswith((".yml", ".yaml")):
+        return True, ["docker_compose"], "docker_compose", "Docker Compose analyzer"
 
-    # nginx
-    (re.compile(r"(?:^|/)nginx\.conf$", re.IGNORECASE), []),
-    (re.compile(r"\.nginx$", re.IGNORECASE), []),
-    (re.compile(r"(?:^|/)sites-(?:available|enabled)/", re.IGNORECASE), []),
+    # 3. Terraform (e.g. main.tf, terraform/main.tf, infra/main.tf, vars.tfvars)
+    if basename.endswith(".tf") or basename.endswith(".tfvars"):
+        return True, ["terraform"], "terraform", "Terraform analyzer"
 
-    # Caddyfile
-    (re.compile(r"(?:^|/)Caddyfile$", re.IGNORECASE), []),
+    # 4. GitHub Actions (e.g. .github/workflows/ci.yml, .github/workflows/deploy.yaml)
+    if ".github/workflows/" in norm_path and basename.endswith((".yml", ".yaml")):
+        return True, ["github_actions"], "github_actions", "GitHub Actions analyzer"
 
-    # cloud-init
-    (re.compile(r"(?:^|/)(?:cloud-init|user-data)[\w.\-]*$", re.IGNORECASE), []),
+    # 5. Kubernetes & Helm (e.g. kubernetes/deployment.yaml, k8s/deployment.yaml, helm/chart/values.yaml, deploy/pod.yml)
+    is_yaml = basename.endswith((".yml", ".yaml"))
+    k8s_file_stems = {
+        "deployment", "service", "ingress", "statefulset", "daemonset",
+        "job", "cronjob", "configmap", "pod", "replicaset", "namespace", "rbac",
+        "clusterrole", "clusterrolebinding", "rolebinding", "networkpolicy",
+        "hpa", "pvc", "pv", "storageclass", "serviceaccount", "chart", "values"
+    }
+    k8s_dir_keywords = {"kubernetes", "k8s", "manifests", "deploy", "helm", "templates"}
 
-    # Ansible
-    (re.compile(r"(?:^|/)(?:playbook|site)[\w.\-]*\.ya?ml$", re.IGNORECASE), []),
-    (re.compile(r"(?:^|/)roles/[^/]+/(?:tasks|handlers|defaults|vars|meta)/main\.ya?ml$",
-                re.IGNORECASE), []),
-    (re.compile(r"\.ansible\.ya?ml$", re.IGNORECASE), []),
-]
+    if is_yaml:
+        stem = path_obj.stem
+        if stem in k8s_file_stems or basename in ("chart.yaml", "values.yaml"):
+            return True, ["kubernetes"], "kubernetes", "Kubernetes analyzer"
+        if any(d in k8s_dir_keywords for d in parent_parts) or "templates/" in norm_path:
+            return True, ["kubernetes"], "kubernetes", "Kubernetes analyzer"
+
+    # 6. nginx (e.g. nginx.conf, sites-available/default, app.nginx)
+    if basename == "nginx.conf" or basename.endswith(".nginx") or "sites-available/" in norm_path or "sites-enabled/" in norm_path:
+        return True, [], "nginx", "Nginx configuration"
+
+    # 7. Caddyfile (e.g. Caddyfile, caddy/Caddyfile)
+    if basename == "caddyfile" or basename.endswith(".caddyfile") or basename.startswith("caddyfile"):
+        return True, [], "caddy", "Caddyfile configuration"
+
+    # 8. cloud-init (e.g. cloud-init.yml, user-data)
+    if basename.startswith("cloud-init") or basename.startswith("user-data"):
+        return True, [], "cloud_init", "cloud-init configuration"
+
+    # 9. Ansible (e.g. playbook.yml, site.yml, roles/web/tasks/main.yml)
+    if basename.endswith((".ansible.yml", ".ansible.yaml")):
+        return True, [], "ansible", "Ansible playbook"
+    if is_yaml and (basename.startswith("playbook") or basename == "site.yml" or "roles/" in norm_path):
+        return True, [], "ansible", "Ansible playbook"
+
+    # Determine skip reason
+    if basename.endswith((".md", ".txt", ".rst")) or "docs/" in norm_path or "readme" in basename or "license" in basename:
+        skip_reason = "documentation file"
+    elif basename.endswith((".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".java", ".c", ".cpp", ".rs", ".rb", ".php")):
+        skip_reason = "application source"
+    else:
+        skip_reason = "non-infrastructure file"
+
+    return False, [], "skipped", skip_reason
+
 
 # Map analyzer names to analyzer instances
 _ANALYZER_BY_NAME: dict[str, Any] = {a.name: a for a in ANALYZERS}
 
 
-def _classify_file(filename: str) -> tuple[bool, list[str]]:
-    """Return (is_infra_file, [analyzer_names]).
-
-    is_infra_file — True if the filename matches any known infra pattern.
-    analyzer_names — List of analyzer names that should process the file
-                     (may be empty for infra files with no specific analyzer yet,
-                     e.g. nginx.conf, Ansible playbooks).
-    """
-    for pattern, analyzer_names in _INFRA_FILE_PATTERNS:
-        if pattern.search(filename):
-            return True, analyzer_names
-    return False, []
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +205,7 @@ def _score_findings(findings: list[Finding], patch_text: str) -> tuple[float, fl
 
     det_score = 0.0
     penalty = 0.0
+    has_patch = bool(patch_text.strip())
 
     for sev, group in by_severity.items():
         base_w = _SEVERITY_BASE_WEIGHT[sev]
@@ -193,7 +214,7 @@ def _score_findings(findings: list[Finding], patch_text: str) -> tuple[float, fl
             effective = base_w * decay
 
             matched_str = str((finding.evidence or {}).get("matched") or "").strip()
-            is_new = (matched_str and matched_str in patch_text) if patch_text else True
+            is_new = (matched_str and matched_str in patch_text) if has_patch else True
 
             if is_new:
                 det_score += effective
@@ -204,14 +225,20 @@ def _score_findings(findings: list[Finding], patch_text: str) -> tuple[float, fl
     return round(det_score, 1), round(penalty, 1)
 
 
+
 def _synergy_bonus(findings: list[Finding]) -> int:
     """Award bonus points for dangerous finding combinations."""
     rule_ids = {f.rule_id for f in findings}
     bonus = 0
 
+    # Hardcoded credentials / secrets exposure
+    if "HARDCODED_AWS_CREDENTIALS" in rule_ids or "HARDCODED_SECRET" in rule_ids:
+        bonus += 60
+
     # Docker socket + root = trivial full host escape
     if "DOCKER_SOCK_MOUNT" in rule_ids and "DOCKER_ROOT_USER" in rule_ids:
         bonus += 20
+
     # Root + no healthcheck + latest tag: reliability + supply-chain compound
     if "DOCKER_ROOT_USER" in rule_ids and (
         "DOCKER_LATEST_TAG" in rule_ids or "DOCKER_MISSING_HEALTHCHECK" in rule_ids
@@ -361,20 +388,41 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
     findings: list[Finding] = []
     infra_files_seen: list[str] = []
 
+    if not files and context.get("text"):
+        # Fallback for text/metadata-only payloads without explicit changed_files
+        text_content = str(context.get("text") or "")
+        for analyzer in ANALYZERS:
+            results = analyzer.analyze(text_content, file_path="infrastructure.yaml")
+            findings.extend(results)
+        if findings:
+            infra_files_seen.append("infrastructure.yaml")
+
     for file_entry in files:
-        filename = str(
-            file_entry.get("filename")
-            or file_entry.get("file_path")
-            or "unknown"
-        )
-        patch = str(file_entry.get("patch") or "")
-        content = f"{filename}\n{patch}" if patch else filename
-
-        is_infra, analyzer_names = _classify_file(filename)
-
-        if not is_infra:
+        if isinstance(file_entry, str):
+            filename = file_entry
+            patch = ""
+        elif isinstance(file_entry, dict):
+            filename = str(
+                file_entry.get("filename")
+                or file_entry.get("file_path")
+                or file_entry.get("path")
+                or "unknown"
+            )
+            patch = str(file_entry.get("patch") or "")
+        else:
             continue
 
+        content = f"{filename}\n{patch}" if patch else filename
+
+        logger.info("Received filename: %s", filename)
+
+        is_infra, analyzer_names, category, display_or_reason = _classify_file(filename)
+
+        if not is_infra:
+            logger.info("%s → skipped (%s)", filename, display_or_reason)
+            continue
+
+        logger.info("%s → %s", filename, display_or_reason)
         infra_files_seen.append(filename)
 
         for name in analyzer_names:
@@ -387,10 +435,13 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
     secrets_analyzer = _ANALYZER_BY_NAME.get("secrets")
     if secrets_analyzer and infra_files_seen:
         for file_entry in files:
-            filename = str(file_entry.get("filename") or "unknown")
-            is_infra, _ = _classify_file(filename)
+            filename = str(
+                file_entry if isinstance(file_entry, str)
+                else (file_entry.get("filename") or file_entry.get("file_path") or "unknown")
+            )
+            is_infra, _, _, _ = _classify_file(filename)
             if is_infra:
-                patch = str(file_entry.get("patch") or "")
+                patch = str(file_entry.get("patch") if isinstance(file_entry, dict) else "")
                 content = f"{filename}\n{patch}" if patch else filename
                 findings.extend(secrets_analyzer.analyze(content, file_path=filename))
 
