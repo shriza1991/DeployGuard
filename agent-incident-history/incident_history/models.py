@@ -53,6 +53,12 @@ class SimilarIncident:
     rollback: bool = False
     root_cause: str = ""
     timestamp: str = ""
+    summary: str = ""
+    impact: str = ""
+    resolution: str = ""
+    lessons_learned: str = ""
+    preventive_controls: list[str] = field(default_factory=list)
+    affected_services: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     rank_score: float = 0.0
@@ -72,6 +78,12 @@ class SimilarIncident:
             rollback=bool(payload.get("rollback", False)),
             root_cause=str(payload.get("root_cause") or ""),
             timestamp=str(payload.get("timestamp") or ""),
+            summary=str(payload.get("summary") or payload.get("description") or ""),
+            impact=str(payload.get("impact") or ""),
+            resolution=str(payload.get("resolution") or ""),
+            lessons_learned=str(payload.get("lessons_learned") or ""),
+            preventive_controls=[str(c) for c in payload.get("preventive_controls", [])] if isinstance(payload.get("preventive_controls"), list) else [],
+            affected_services=[str(s) for s in payload.get("affected_services", [])] if isinstance(payload.get("affected_services"), list) else [],
             tags=[str(tag).lower() for tag in payload.get("tags", []) if str(tag).strip()],
             metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
         )
@@ -83,6 +95,9 @@ class SimilarIncident:
             "severity": self.severity,
             "outcome": self.outcome,
             "title": self.title,
+            "root_cause": self.root_cause,
+            "impact": self.impact,
+            "resolution": self.resolution,
         }
 
 
@@ -94,6 +109,10 @@ class LLMResult:
     risk_reasoning: list[str] = field(default_factory=list)
     recommendations: list[str] = field(default_factory=list)
     confidence: float = 0.0
+    executive_summary: str = ""
+    common_failure_pattern: str = ""
+    risk_comparison: str = ""
+    historical_recommendations: list[str] = field(default_factory=list)
 
     def output(self) -> dict[str, Any]:
         return {
@@ -103,5 +122,8 @@ class LLMResult:
             "risk_reasoning": self.risk_reasoning,
             "recommendations": self.recommendations,
             "confidence": max(0.0, min(1.0, float(self.confidence))),
+            "executive_summary": self.executive_summary or self.summary,
+            "common_failure_pattern": self.common_failure_pattern,
+            "risk_comparison": self.risk_comparison,
+            "historical_recommendations": self.historical_recommendations or self.recommendations,
         }
-

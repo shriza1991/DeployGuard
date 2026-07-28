@@ -28,10 +28,14 @@ class IncidentLLMReasoner:
             return LLMResult(
                 provider=getattr(self.provider, "name", "unavailable"),
                 available=False,
-                summary="No historical incidents available.",
-                risk_reasoning=[],
-                recommendations=[],
-                confidence=0.0,
+                summary="No similar historical incidents found in corpus.",
+                risk_reasoning=["No matching historical failure patterns identified."],
+                recommendations=["Standard code review and pre-deployment automated checks."],
+                confidence=0.50,
+                executive_summary="No similar historical incidents were found for this pull request.",
+                common_failure_pattern="No recurring historical failure pattern identified.",
+                risk_comparison="This deployment presents standard baseline risk as no matching past production incidents were retrieved.",
+                historical_recommendations=["Enforce standard pre-deployment CI/CD unit and security testing."],
             )
 
         prompt = _build_prompt(deployment_document, deterministic_result, incidents)
@@ -65,9 +69,9 @@ class IncidentLLMReasoner:
             provider=getattr(self.provider, "name", "unavailable"),
             available=False,
             summary="Historical retrieval completed without LLM enrichment.",
-            risk_reasoning=[],
-            recommendations=[],
-            confidence=0.0,
+            risk_reasoning=["LLM reasoning provider unavailable."],
+            recommendations=["Review retrieved similar incidents manually."],
+            confidence=0.50,
         )
 
 
@@ -75,16 +79,16 @@ def _build_prompt(deployment_document: str, deterministic_result: dict[str, Any]
     incident_payload = [
         {
             "incident_id": item.incident_id,
-            "similarity": item.similarity,
+            "similarity": round(item.similarity, 3),
             "severity": item.severity,
             "outcome": item.outcome,
             "title": item.title,
-            "description": item.description,
-            "service": item.service,
-            "environment": item.environment,
-            "rollback": item.rollback,
+            "summary": item.summary or item.description,
             "root_cause": item.root_cause,
-            "timestamp": item.timestamp,
+            "impact": item.impact,
+            "resolution": item.resolution,
+            "lessons_learned": item.lessons_learned,
+            "preventive_controls": item.preventive_controls,
             "tags": item.tags,
         }
         for item in incidents
@@ -93,59 +97,64 @@ def _build_prompt(deployment_document: str, deterministic_result: dict[str, Any]
     deterministic_text = normalized_json(deterministic_result)
 
     return (
-        "You are a Staff DevSecOps Engineer analyzing historical incident patterns for DeployGuard.\n"
-        "Your job is to reason about whether this deployment resembles previous production failures,\n"
-        "identify recurring failure patterns, and produce actionable recommendations.\n"
-        "You reason from the evidence provided — not from generic assumptions.\n\n"
+        "You are an expert Staff DevSecOps Historical Reasoning Analyst for DeployGuard.\n"
+        "Your task is to analyze an incoming pull request against retrieved historical production incidents.\n"
+        "Compare the current pull request directly against the retrieved incidents rather than merely listing them.\n"
+        "You must answer four core questions:\n"
+        "  1. What happened before? (Summarize retrieved incidents, root causes, and resolutions)\n"
+        "  2. How similar is this PR? (Compare specific diff patterns with past incidents)\n"
+        "  3. What is different? (Identify attack surface differences that make this PR lower, similar, or higher risk)\n"
+        "  4. What can we learn? (Derive actionable recommendations strictly from what resolved past incidents)\n\n"
         "-------------------------------------------------\n"
-        "Deployment Being Evaluated\n"
+        "Pull Request Being Evaluated\n"
         f"{deployment_document[:4000]}\n\n"
         "-------------------------------------------------\n"
-        "Deterministic Risk Assessment\n"
+        "Deterministic Risk Summary\n"
         f"{deterministic_text}\n\n"
         "-------------------------------------------------\n"
-        "Matched Historical Incidents (ordered by similarity)\n"
+        "Retrieved Historical Incidents (Ordered by Relevance)\n"
         f"{incident_text}\n\n"
         "-------------------------------------------------\n"
-        "Task\n"
-        "Analyze whether this deployment shares characteristics with the matched historical incidents.\n"
-        "Think like a Staff DevSecOps Engineer:\n"
-        "  - WHICH specific incidents (by incident_id) are most relevant, and WHY?\n"
-        "  - WHAT root cause pattern do they share with this deployment?\n"
-        "  - DID the matched incidents result in rollbacks or production failures?\n"
-        "  - HOW severe was the blast radius of those historical incidents?\n"
-        "  - WHAT concrete action should the team take before merging this change?\n\n"
-        "Rules:\n"
-        "  - Only cite incidents that are genuinely similar (similarity >= 0.70).\n"
-        "  - Do NOT fabricate incident details not present in the provided data.\n"
-        "  - If no incidents are highly similar, say so and recommend proceeding with caution.\n"
-        "  - Confidence calibration:\n"
-        "      >= 0.85 → multiple high-similarity incidents (>= 0.80) with matching root cause\n"
-        "      0.65-0.84 → one or more moderate-similarity incidents (>= 0.70)\n"
-        "      0.40-0.64 → low-similarity matches, pattern is weak\n"
-        "      < 0.40 → no meaningful historical match found\n\n"
-        "IMPORTANT: Return ONLY a valid JSON object. No Markdown. No code fences.\n"
-        "Required JSON shape:\n"
+        "Instructions & Required Output JSON Format\n"
+        "Return ONLY a valid JSON object with the following fields:\n"
         "{\n"
-        '  "summary": "...",\n'
-        '  "risk_reasoning": ["...", "..."],\n'
-        '  "recommendations": ["...", "..."],\n'
-        '  "confidence": 0.75,\n'
+        '  "executive_summary": "High-level analytical summary comparing this PR to historical incidents.",\n'
+        '  "common_failure_pattern": "Explanation of the underlying systemic weakness connecting the retrieved incidents (e.g. excessive container privileges combined with missing boundary controls).",\n'
+        '  "risk_comparison": "Explicit risk comparison stating whether this PR is lower risk, similar risk, or higher risk than the retrieved incidents and why.",\n'
+        '  "historical_recommendations": ["Recommendation 1 derived from past resolutions", "Recommendation 2..."],\n'
+        '  "confidence": 0.85,\n'
         '  "available": true\n'
         "}\n"
     )
 
 
-
 def _normalize_response(response: dict[str, Any], provider_name: str) -> LLMResult:
     if not isinstance(response, dict):
         raise ValueError("LLM response was not a JSON object")
+
+    summary = str(response.get("summary") or response.get("executive_summary") or "")
+    exec_summary = str(response.get("executive_summary") or summary)
+    common_pattern = str(response.get("common_failure_pattern") or "")
+    risk_comp = str(response.get("risk_comparison") or "")
+
+    recs_raw = response.get("historical_recommendations") or response.get("recommendations") or []
+    recs = [str(item) for item in recs_raw if str(item).strip()]
+
+    reasoning_raw = response.get("risk_reasoning") or []
+    reasoning = [str(item) for item in reasoning_raw if str(item).strip()]
+
+    if not reasoning:
+        reasoning = [r for r in [exec_summary, common_pattern, risk_comp] if r]
+
     return LLMResult(
         provider=provider_name,
         available=bool(response.get("available", True)),
-        summary=str(response.get("summary") or ""),
-        risk_reasoning=[str(item) for item in response.get("risk_reasoning", []) if str(item).strip()],
-        recommendations=[str(item) for item in response.get("recommendations", []) if str(item).strip()],
-        confidence=max(0.0, min(1.0, float(response.get("confidence", 0.0) or 0.0))),
+        summary=summary or exec_summary,
+        risk_reasoning=reasoning,
+        recommendations=recs,
+        confidence=max(0.0, min(1.0, float(response.get("confidence", 0.0) or 0.80))),
+        executive_summary=exec_summary,
+        common_failure_pattern=common_pattern,
+        risk_comparison=risk_comp,
+        historical_recommendations=recs,
     )
-

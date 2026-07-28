@@ -11,9 +11,12 @@ class FallbackLLMProvider(LLMProvider):
     def analyze(self, prompt: str) -> dict[str, Any]:
         return {
             "available": False,
-            "summary": "",
-            "risk_reasoning": [],
-            "recommendations": [],
-            "confidence": 0.0,
+            "summary": "Historical retrieval completed without LLM enrichment.",
+            "risk_reasoning": ["LLM reasoning provider unavailable."],
+            "recommendations": ["Review retrieved similar incidents manually."],
+            "confidence": 0.50,
+            "executive_summary": "Historical retrieval completed without LLM enrichment.",
+            "common_failure_pattern": "",
+            "risk_comparison": "",
+            "historical_recommendations": ["Review retrieved similar incidents manually."],
         }
-

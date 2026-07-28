@@ -45,10 +45,9 @@ class IncidentHistoryService:
             confidence_val = fallback.get("confidence", 0.0)
             return fallback
         finally:
-            import datetime
             total_latency_ms = (time.perf_counter() - started) * 1000.0
             self.analysis_count += 1
-            self.last_run_timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+            self.last_run_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
             self.total_latency_ms += total_latency_ms
             self.total_confidence += confidence_val
 
@@ -93,7 +92,7 @@ class IncidentHistoryService:
             qdrant_available = self.vector_store.health_check()
             if not qdrant_available:
                 raise RuntimeError("Qdrant health check failed")
-            incidents, retrieval_metadata = self.retriever.search(query_vector)
+            incidents, retrieval_metadata = self.retriever.search(query_vector, query_text=deployment_document)
         except Exception as exc:
             logger.warning("Qdrant fallback activated: %s", exc)
             qdrant_available = False
@@ -137,18 +136,24 @@ class IncidentHistoryService:
         deterministic["metadata"]["completed_at"] = completed_at_iso
         deterministic["metadata"]["incident_history_ms"] = latency_ms
 
+        avg_similarity = round(sum(inc.similarity for inc in incidents) / len(incidents), 3) if incidents else 0.0
+
         return {
             "agent": "incident-history",
             "correlation_id": correlation_id,
             "score": deterministic["score"],
             "severity": deterministic["severity"],
             "confidence": deterministic["confidence"],
+            "confidence_explanation": deterministic["confidence_explanation"],
             "confidence_factors": factors,
             "reasons": deterministic["reasons"],
             "recommendations": _merge_recommendations(
                 deterministic["recommendations"],
                 llm_result.recommendations,
             ),
+            "retrieved_incident_count": len(incidents),
+            "average_similarity": avg_similarity,
+            "historical_pattern": getattr(llm_result, "common_failure_pattern", "") or "No recurring historical failure pattern identified.",
             "started_at": started_at_iso,
             "completed_at": completed_at_iso,
             "duration_ms": latency_ms,
@@ -157,7 +162,6 @@ class IncidentHistoryService:
             "similar_incidents": [incident.output() for incident in incidents],
             "llm": llm_result.output(),
         }
-
 
     def _deterministic_result(
         self,
@@ -170,12 +174,14 @@ class IncidentHistoryService:
         score = _score_incidents(incidents, qdrant_available)
         severity = _severity(score)
         confidence, factors = _confidence(incidents, qdrant_available, embedding_quality)
+        explanation = _confidence_explanation(confidence, incidents, qdrant_available)
         reasons = _reasons(incidents, qdrant_available)
         recommendations = _recommendations(score, incidents, qdrant_available)
         return {
             "score": score,
             "severity": severity,
             "confidence": confidence,
+            "confidence_explanation": explanation,
             "confidence_factors": factors,
             "reasons": reasons,
             "recommendations": recommendations,
@@ -219,9 +225,13 @@ class IncidentHistoryService:
             "score": 10,
             "severity": "low",
             "confidence": 0.1,
+            "confidence_explanation": "Confidence is low (0.10) because historical incident analysis is running in fallback mode.",
             "confidence_factors": factors,
             "reasons": [reason, "No historical incidents available."],
             "recommendations": [recommendation],
+            "retrieved_incident_count": 0,
+            "average_similarity": 0.0,
+            "historical_pattern": "No recurring historical failure pattern identified.",
             "score_breakdown": breakdown,
             "metadata": metadata,
             "similar_incidents": [],
@@ -232,6 +242,10 @@ class IncidentHistoryService:
                 "risk_reasoning": [],
                 "recommendations": [],
                 "confidence": 0.0,
+                "executive_summary": "Historical incident analysis is running in fallback mode.",
+                "common_failure_pattern": "",
+                "risk_comparison": "",
+                "historical_recommendations": [],
             },
         }
 
@@ -262,8 +276,8 @@ def _score_incidents(incidents: list[SimilarIncident], qdrant_available: bool) -
     if not qdrant_available or not incidents:
         return 10
 
-    # Require similarity >= 0.70 for incident matches to boost score
-    high_similarity = [item for item in incidents if item.similarity >= 0.70]
+    # Require similarity >= 0.65 for incident matches to boost score
+    high_similarity = [item for item in incidents if item.similarity >= 0.65]
     if not high_similarity:
         return 10
 
@@ -300,17 +314,35 @@ def _confidence(incidents: list[SimilarIncident], qdrant_available: bool, embedd
         factors.append("No historical incidents matched (clean record)")
         return 0.92, factors
 
-    top_similarity = max(item.similarity for item in incidents)
-    metadata_quality = sum(
-        1 for item in incidents
-        if item.severity and item.environment and item.outcome and item.root_cause
-    ) / max(1, len(incidents))
+    count = len(incidents)
+    avg_sim = sum(item.similarity for item in incidents) / count
+    top_sim = max(item.similarity for item in incidents)
 
-    factors.append(f"{len(incidents)} historical incident(s) evaluated")
-    factors.append(f"Top match similarity: {top_similarity:.2f}")
+    all_tags = [tag for item in incidents for tag in item.tags]
+    unique_tags = len(set(all_tags))
+    tag_diversity_score = min(0.10, unique_tags * 0.02)
 
-    confidence = 0.50 + min(0.35, top_similarity * 0.35) + min(0.1, len(incidents) * 0.02) + (metadata_quality * 0.05)
-    return round(max(0.0, min(1.0, confidence)), 2), factors
+    has_resolutions = sum(1 for item in incidents if item.resolution) / max(1, count)
+    resolution_consistency_score = has_resolutions * 0.08
+
+    factors.append(f"{count} historical incident(s) evaluated")
+    factors.append(f"Average match similarity: {avg_sim:.2f} (top: {top_sim:.2f})")
+    factors.append(f"Evidence resolution consistency: {int(has_resolutions * 100)}%")
+
+    base_conf = 0.55 + (avg_sim * 0.25) + min(0.10, count * 0.03) + tag_diversity_score + resolution_consistency_score
+    final_conf = round(max(0.0, min(1.0, base_conf)), 2)
+
+    return final_conf, factors
+
+
+def _confidence_explanation(confidence: float, incidents: list[SimilarIncident], qdrant_available: bool) -> str:
+    if not qdrant_available:
+        return "Confidence is low because the historical incident database is unavailable."
+    if not incidents:
+        return f"High confidence ({confidence}): No similar historical production incidents were retrieved for this change."
+    count = len(incidents)
+    avg_sim = sum(item.similarity for item in incidents) / count
+    return f"Confidence is {confidence} based on {count} retrieved incident(s) with an average similarity of {avg_sim:.2f}."
 
 
 def _severity(score: int) -> str:
@@ -362,4 +394,3 @@ def _merge_recommendations(deterministic: list[str], llm: list[str]) -> list[str
             seen.add(normalized)
             merged.append(item)
     return merged
-

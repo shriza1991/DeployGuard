@@ -8,5 +8,6 @@
   "test_regression_suite.py::test_scenario_privileged_kubernetes": true,
   "test_regression_suite.py::test_scenario_open_ssh_ingress": true,
   "test_regression_suite.py::test_scenario_public_s3_bucket": true,
-  "test_regression_suite.py::test_scenario_aws_secret_key": true
+  "test_regression_suite.py::test_scenario_aws_secret_key": true,
+  "test_regression_suite.py::test_confidence_case_6_zero_incidents_high_confidence": true
 }
