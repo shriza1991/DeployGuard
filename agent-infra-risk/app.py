@@ -196,12 +196,20 @@ for msg in consumer:
             "duration_ms": latency_ms,
             "metadata": meta,
             "llm": {
+                # ── Legacy fields preserved for aggregator contract ───────
                 "provider": llm_result.get("provider"),
                 "available": llm_result.get("available", False),
                 "summary": llm_result.get("summary"),
                 "risk_reasoning": llm_result.get("risk_reasoning", []),
                 "recommendations": llm_result.get("recommendations", []),
                 "confidence": llm_result.get("confidence", 0.0),
+                # ── New synthesis fields (additive) ──────────────────────
+                "executive_summary": llm_result.get("executive_summary", ""),
+                "risk_narrative": llm_result.get("risk_narrative", ""),
+                "deployment_recommendation": llm_result.get("deployment_recommendation", ""),
+                "primary_attack_scenario": llm_result.get("primary_attack_scenario", ""),
+                "reviewer_priorities": llm_result.get("reviewer_priorities", []),
+                "confidence_explanation": llm_result.get("confidence_explanation", ""),
             },
         }
         producer.send(OUTPUT_TOPIC, output)

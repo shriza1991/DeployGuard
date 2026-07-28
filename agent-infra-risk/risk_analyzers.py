@@ -1,42 +1,117 @@
+"""
+risk_analyzers
+~~~~~~~~~~~~~~
+Deterministic infrastructure security analysis for pull-request diffs.
+
+Key design principles
+---------------------
+1. Only infrastructure files present in the PR diff are analyzed — never the
+   whole repository.
+2. Each file is routed to the correct analyzer(s) by filename pattern.
+3. Scoring is purely additive (severity weights × decay) with synergy bonuses.
+   No hardcoded per-rule score overrides.
+4. If no infrastructure files are found in the diff the analysis returns
+   immediately with score=0 and a descriptive message.
+"""
 from __future__ import annotations
 
 import logging
-import os
-import sys
+import re
 import time
 from typing import Any
 
 from infra_risk.analyzers import ANALYZERS, dedupe_findings
+from infra_risk.analyzers.base import Finding
 
 
 logger = logging.getLogger("infra-risk-agent.analyzers")
 
-SEVERITY_WEIGHTS = {
-    "CRITICAL": 4,
-    "HIGH": 3,
-    "MEDIUM": 2,
-    "LOW": 1,
-    "critical": 4,
-    "high": 3,
-    "medium": 2,
-    "low": 1,
-}
+
+# ---------------------------------------------------------------------------
+# Infrastructure file classification
+# ---------------------------------------------------------------------------
+
+# Each entry: (compiled regex, list-of-analyzer-names)
+# Analyzers are matched by their `name` attribute.
+_INFRA_FILE_PATTERNS: list[tuple[re.Pattern[str], list[str]]] = [
+    # Dockerfiles
+    (re.compile(r"(?:^|/)Dockerfile(?:\.\w+)?$", re.IGNORECASE), ["docker"]),
+    (re.compile(r"\.dockerfile$", re.IGNORECASE), ["docker"]),
+
+    # Docker Compose
+    (re.compile(r"(?:^|/)docker-compose(?:[.\-]\w+)?\.ya?ml$", re.IGNORECASE), ["docker_compose"]),
+
+    # Terraform
+    (re.compile(r"\.tf$", re.IGNORECASE), ["terraform"]),
+    (re.compile(r"\.tfvars$", re.IGNORECASE), ["terraform"]),
+
+    # GitHub Actions
+    (re.compile(r"\.github/workflows/[^/]+\.ya?ml$", re.IGNORECASE), ["github_actions"]),
+
+    # Kubernetes / Helm
+    (re.compile(r"(?:^|/)(?:deployment|service|ingress|statefulset|daemonset|"
+                r"job|cronjob|configmap|pod|replicaset|namespace|rbac|"
+                r"clusterrole|clusterrolebinding|rolebinding|networkpolicy|"
+                r"hpa|pvc|pv|storageclass|serviceaccount|"
+                r"Chart|values)\.ya?ml$", re.IGNORECASE), ["kubernetes"]),
+    (re.compile(r"(?:^|/)templates/[^/]+\.ya?ml$", re.IGNORECASE), ["kubernetes"]),  # Helm templates
+
+    # nginx
+    (re.compile(r"(?:^|/)nginx\.conf$", re.IGNORECASE), []),
+    (re.compile(r"\.nginx$", re.IGNORECASE), []),
+    (re.compile(r"(?:^|/)sites-(?:available|enabled)/", re.IGNORECASE), []),
+
+    # Caddyfile
+    (re.compile(r"(?:^|/)Caddyfile$", re.IGNORECASE), []),
+
+    # cloud-init
+    (re.compile(r"(?:^|/)(?:cloud-init|user-data)[\w.\-]*$", re.IGNORECASE), []),
+
+    # Ansible
+    (re.compile(r"(?:^|/)(?:playbook|site)[\w.\-]*\.ya?ml$", re.IGNORECASE), []),
+    (re.compile(r"(?:^|/)roles/[^/]+/(?:tasks|handlers|defaults|vars|meta)/main\.ya?ml$",
+                re.IGNORECASE), []),
+    (re.compile(r"\.ansible\.ya?ml$", re.IGNORECASE), []),
+]
+
+# Map analyzer names to analyzer instances
+_ANALYZER_BY_NAME: dict[str, Any] = {a.name: a for a in ANALYZERS}
 
 
-def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
+def _classify_file(filename: str) -> tuple[bool, list[str]]:
+    """Return (is_infra_file, [analyzer_names]).
+
+    is_infra_file — True if the filename matches any known infra pattern.
+    analyzer_names — List of analyzer names that should process the file
+                     (may be empty for infra files with no specific analyzer yet,
+                     e.g. nginx.conf, Ansible playbooks).
+    """
+    for pattern, analyzer_names in _INFRA_FILE_PATTERNS:
+        if pattern.search(filename):
+            return True, analyzer_names
+    return False, []
+
+
+# ---------------------------------------------------------------------------
+# Context builder
+# ---------------------------------------------------------------------------
+
+def _build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     pr = payload.get("pull_request") or {}
     head_commit = payload.get("head_commit") or {}
+
     files: list[dict[str, Any]] = []
-    if isinstance(payload.get("changed_files"), list):
-        files.extend(payload.get("changed_files", []))
+    for key in ("changed_files", "files", "diffs"):
+        candidate = payload.get(key)
+        if isinstance(candidate, list):
+            files.extend(candidate)
 
-    if isinstance(payload.get("files"), list):
-        files.extend(payload.get("files", []))
-    if isinstance(payload.get("diffs"), list):
-        files.extend(payload.get("diffs", []))
-
+    # Single-file diff shorthand
     if isinstance(payload.get("diff"), str) and payload.get("diff"):
-        files.append({"filename": payload.get("filename", "<diff>"), "patch": payload.get("diff")})
+        files.append({
+            "filename": payload.get("filename", "<diff>"),
+            "patch": payload["diff"],
+        })
 
     raw_cf = payload.get("changed_files")
     if isinstance(raw_cf, list):
@@ -49,12 +124,14 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         payload_changed_files = int(pr.get("changed_files") or 0)
 
-    file_names = "\n".join(str(item.get("filename", "")) for item in files if item.get("filename"))
-    patch_text = "\n".join(str(item.get("patch", "")) for item in files if item.get("patch"))
-    changed_file_count = len(files) if files else payload_changed_files
+    patch_text = "\n".join(str(f.get("patch", "")) for f in files if f.get("patch"))
+    file_names = "\n".join(str(f.get("filename", "")) for f in files if f.get("filename"))
     changed_line_count = sum(
-        len([line for line in str(item.get("patch", "")).splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))])
-        for item in files
+        len([
+            line for line in str(f.get("patch", "")).splitlines()
+            if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+        ])
+        for f in files
     )
 
     return {
@@ -62,280 +139,383 @@ def build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
         "pull_request": pr,
         "head_commit": head_commit,
         "changed_files": files,
-        "changed_file_count": changed_file_count,
+        "changed_file_count": len(files) if files else payload_changed_files,
         "payload_changed_file_count": payload_changed_files,
         "changed_line_count": changed_line_count,
         "patch_text": patch_text,
         "file_names": file_names,
         "repository": payload.get("repository") or {},
-        "text": "\n".join(
-            [
-                str(pr.get("title", "")),
-                str(pr.get("body", "")),
-                str(head_commit.get("message", "")),
-                str(payload.get("commit_message", "")),
-                file_names,
-                patch_text,
-            ]
-        ).lower(),
+        "text": "\n".join([
+            str(pr.get("title", "")),
+            str(pr.get("body", "")),
+            str(head_commit.get("message", "")),
+            str(payload.get("commit_message", "")),
+            file_names,
+            patch_text,
+        ]).lower(),
     }
 
 
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-try:
-    from technology_detector import infer_repository_capabilities
-except ImportError:
-    def infer_repository_capabilities(ctx):
-        return {"docker", "kubernetes", "terraform", "github_actions", "secrets", "authentication"}
+# ---------------------------------------------------------------------------
+# Scoring model
+# ---------------------------------------------------------------------------
+
+_SEVERITY_BASE_WEIGHT: dict[str, float] = {
+    "CRITICAL": 35.0,
+    "HIGH": 20.0,
+    "MEDIUM": 8.0,
+    "LOW": 3.0,
+}
+
+_DECAY_MULTIPLIERS = [1.0, 0.7, 0.5, 0.3]
+
+
+def _score_findings(findings: list[Finding], patch_text: str) -> tuple[float, float]:
+    """Return (deterministic_score, pre_existing_penalty).
+
+    Findings scored with severity-based weights and per-severity decay.
+    Findings whose matched text does not appear in the diff are penalised
+    (likely pre-existing).
+    """
+    by_severity: dict[str, list[Finding]] = {k: [] for k in _SEVERITY_BASE_WEIGHT}
+    for f in findings:
+        sev = f.severity.upper()
+        bucket = sev if sev in by_severity else "MEDIUM"
+        by_severity[bucket].append(f)
+
+    det_score = 0.0
+    penalty = 0.0
+
+    for sev, group in by_severity.items():
+        base_w = _SEVERITY_BASE_WEIGHT[sev]
+        for idx, finding in enumerate(group):
+            decay = _DECAY_MULTIPLIERS[min(idx, len(_DECAY_MULTIPLIERS) - 1)]
+            effective = base_w * decay
+
+            matched_str = str((finding.evidence or {}).get("matched") or "").strip()
+            is_new = (matched_str and matched_str in patch_text) if patch_text else True
+
+            if is_new:
+                det_score += effective
+            else:
+                det_score += effective * 0.20
+                penalty += effective * 0.80
+
+    return round(det_score, 1), round(penalty, 1)
+
+
+def _synergy_bonus(findings: list[Finding]) -> int:
+    """Award bonus points for dangerous finding combinations."""
+    rule_ids = {f.rule_id for f in findings}
+    bonus = 0
+
+    # Docker socket + root = trivial full host escape
+    if "DOCKER_SOCK_MOUNT" in rule_ids and "DOCKER_ROOT_USER" in rule_ids:
+        bonus += 20
+    # Root + no healthcheck + latest tag: reliability + supply-chain compound
+    if "DOCKER_ROOT_USER" in rule_ids and (
+        "DOCKER_LATEST_TAG" in rule_ids or "DOCKER_MISSING_HEALTHCHECK" in rule_ids
+    ):
+        bonus += 10
+    # Public S3 + wildcard IAM = full account data exposure
+    if "TF_PUBLIC_S3" in rule_ids and "TF_WILDCARD_IAM" in rule_ids:
+        bonus += 20
+    # Public S3 + open ingress = fully exposed cloud env
+    if "TF_PUBLIC_S3" in rule_ids and "TF_OPEN_INGRESS" in rule_ids:
+        bonus += 15
+    # Privileged K8s + host network = trivial node escape
+    if "K8S_PRIVILEGED" in rule_ids and "K8S_HOST_NETWORK" in rule_ids:
+        bonus += 15
+    # K8s privileged + hostPath = confirmed node escape
+    if "K8S_PRIVILEGED" in rule_ids and "K8S_HOST_PATH" in rule_ids:
+        bonus += 15
+    # Any secret exposure + any open network = credential immediately usable
+    secret_rules = {"HARDCODED_AWS_CREDENTIALS", "HARDCODED_SECRET", "DOCKER_EXPOSED_SECRET", "GHA_SECRETS_ECHO"}
+    open_net_rules = {"TF_OPEN_INGRESS", "TF_PUBLIC_S3", "TF_PUBLIC_DB", "COMPOSE_HOST_NETWORK"}
+    if rule_ids & secret_rules and rule_ids & open_net_rules:
+        bonus += 25
+    # Two or more CRITICAL findings = systemic risk
+    critical_count = sum(1 for f in findings if f.severity.upper() == "CRITICAL")
+    if critical_count >= 2:
+        bonus += 10
+
+    return bonus
+
+
+# ---------------------------------------------------------------------------
+# Infra file presence bonus
+# ---------------------------------------------------------------------------
+
+def _infra_presence_score(infra_file_count: int) -> int:
+    """Small base score reflecting that infra files are present in the PR."""
+    if infra_file_count == 0:
+        return 0
+    # Max 5 points just for touching infra files (no findings)
+    return min(5, 2 + infra_file_count)
+
+
+# ---------------------------------------------------------------------------
+# Severity label
+# ---------------------------------------------------------------------------
+
+def _severity_label(score: int, findings: list[Finding]) -> str:
+    has_critical = any(f.severity.upper() == "CRITICAL" for f in findings)
+    has_high = any(f.severity.upper() == "HIGH" for f in findings)
+    has_medium = any(f.severity.upper() == "MEDIUM" for f in findings)
+
+    if score >= 75 or has_critical:
+        return "critical"
+    if score >= 45 or has_high:
+        return "high"
+    if score >= 15 or has_medium:
+        return "medium"
+    return "low"
+
+
+# ---------------------------------------------------------------------------
+# Confidence
+# ---------------------------------------------------------------------------
+
+def _compute_confidence(
+    has_diff: bool,
+    findings: list[Finding],
+    infra_file_count: int,
+) -> tuple[float, list[str]]:
+    factors: list[str] = []
+
+    if infra_file_count > 0:
+        factors.append(f"{infra_file_count} infrastructure file(s) scoped from PR diff")
+    if has_diff:
+        factors.append("Patch text available for evidence matching")
+    if findings:
+        factors.append("Deterministic IaC security rules evaluated")
+    else:
+        factors.append("No infrastructure misconfigurations detected in scoped files")
+
+    critical_or_high = [f for f in findings if f.severity.upper() in ("CRITICAL", "HIGH")]
+    if critical_or_high:
+        factors.append(f"{len(critical_or_high)} HIGH/CRITICAL finding(s) confirmed against diff")
+
+    if has_diff and findings:
+        confidence = 0.95
+    elif has_diff and infra_file_count > 0:
+        confidence = 0.92
+    elif findings:
+        confidence = 0.70
+    elif infra_file_count > 0:
+        confidence = 0.60
+    else:
+        confidence = 0.40
+
+    return round(confidence, 2), factors
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+_NO_INFRA_MESSAGE = "No infrastructure-related files were modified in this pull request."
 
 
 def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
-    context = build_analysis_context(payload)
-    files = context.get("changed_files", [])
-    patch_text = str(context.get("patch_text") or "")
-    
-    capabilities = infer_repository_capabilities(context)
-    findings = []
+    context = _build_analysis_context(payload)
 
-    logger.info("Analyzer started on %d files. Inferred capabilities: %s", len(files), capabilities)
-    
-    # Check if PR is documentation-only
+    files: list[dict[str, Any]] = context["changed_files"]
+    patch_text: str = context["patch_text"]
+
+    # ── Documentation-only fast-path ─────────────────────────────────────────
     all_filenames = [str(f.get("filename", "")).lower() for f in files if f.get("filename")]
-    is_docs_only = len(all_filenames) > 0 and all(
-        fn.endswith((".md", ".txt", ".rst")) or fn.startswith("docs/") or "readme" in fn or "license" in fn
+    is_docs_only = bool(all_filenames) and all(
+        fn.endswith((".md", ".txt", ".rst")) or fn.startswith("docs/")
+        or "readme" in fn or "license" in fn
         for fn in all_filenames
     )
-
     if is_docs_only:
-        deterministic_dicts: list[dict[str, Any]] = []
-        breakdown = {
-            "git_diff": 0,
-            "deterministic_findings": 0,
-            "repository_context": 0,
-            "incident_history": 0,
-            "metadata": 0,
-            "synergy_bonus": 0,
-            "pre_existing_penalty": 0,
-        }
-        return {
-            "score": 0,
-            "severity": "low",
-            "confidence": 0.95,
-            "reasons": ["Documentation-only pull request detected."],
-            "recommendations": ["No infrastructure risk review required for documentation changes."],
-            "deterministic_findings": deterministic_dicts,
-            "score_breakdown": breakdown,
-            "metadata": {
-                "changed_files": context.get("changed_file_count"),
-                "changed_lines": context.get("changed_line_count"),
-                "pull_request_title": (context.get("pull_request") or {}).get("title"),
-                "pull_request_body": (context.get("pull_request") or {}).get("body"),
-                "commit_message": (context.get("head_commit") or {}).get("message"),
-                "repository": (context.get("repository") or {}).get("name"),
-                "source": "pull_request" if context.get("pull_request") else "commit",
-                "findings": deterministic_dicts,
-                "deterministic_findings": deterministic_dicts,
-                "score_breakdown": breakdown,
-                "inferred_capabilities": list(capabilities),
-            },
-        }
+        return _make_result(
+            score=0,
+            severity="low",
+            confidence=0.95,
+            confidence_factors=["Documentation-only pull request: no infrastructure risk analysis required"],
+            findings=[],
+            reasons=["Documentation-only pull request detected."],
+            recommendations=["No infrastructure risk review required for documentation changes."],
+            context=context,
+            infra_file_count=0,
+            started_at=started_at,
+        )
 
-    analyzer_capability_map = {
-        "docker": "docker",
-        "kubernetes": "kubernetes",
-        "terraform": "terraform",
-        "github-actions": "github_actions",
-        "docker-compose": "docker",
-        "secrets": "secrets",
-    }
+    # ── Route each changed file to its analyzer(s) ───────────────────────────
+    findings: list[Finding] = []
+    infra_files_seen: list[str] = []
 
-    if files:
-        for file_entry in files:
-            filename = str(file_entry.get("filename", "") or file_entry.get("file_path", "") or "unknown")
-            patch = str(file_entry.get("patch", "") or "")
-            content_to_analyze = f"{filename}\n{patch}" if patch else filename
-            
-            for analyzer in ANALYZERS:
-                analyzer_cap = analyzer_capability_map.get(getattr(analyzer, "name", ""), "secrets")
-                if analyzer_cap in capabilities:
-                    results = analyzer.analyze(content_to_analyze, file_path=filename)
-                    findings.extend(results)
-    else:
-        text = str(context.get("text") or "")
-        for analyzer in ANALYZERS:
-            analyzer_cap = analyzer_capability_map.get(getattr(analyzer, "name", ""), "secrets")
-            if analyzer_cap in capabilities:
-                results = analyzer.analyze(text, file_path="infrastructure.yaml")
+    for file_entry in files:
+        filename = str(
+            file_entry.get("filename")
+            or file_entry.get("file_path")
+            or "unknown"
+        )
+        patch = str(file_entry.get("patch") or "")
+        content = f"{filename}\n{patch}" if patch else filename
+
+        is_infra, analyzer_names = _classify_file(filename)
+
+        if not is_infra:
+            continue
+
+        infra_files_seen.append(filename)
+
+        for name in analyzer_names:
+            analyzer = _ANALYZER_BY_NAME.get(name)
+            if analyzer:
+                results = analyzer.analyze(content, file_path=filename)
                 findings.extend(results)
+
+    # Always run the secrets analyzer across ALL infra files (cross-cutting concern)
+    secrets_analyzer = _ANALYZER_BY_NAME.get("secrets")
+    if secrets_analyzer and infra_files_seen:
+        for file_entry in files:
+            filename = str(file_entry.get("filename") or "unknown")
+            is_infra, _ = _classify_file(filename)
+            if is_infra:
+                patch = str(file_entry.get("patch") or "")
+                content = f"{filename}\n{patch}" if patch else filename
+                findings.extend(secrets_analyzer.analyze(content, file_path=filename))
 
     findings = dedupe_findings(findings)
 
-    # --- EVIDENCE ACCUMULATION SCORING MODEL ---
-    file_count = int(context.get("changed_file_count") or 0)
-    has_diff = bool(patch_text.strip() or len(files) > 0)
+    infra_file_count = len(infra_files_seen)
 
-    if not has_diff and not findings:
-        git_diff_score = 0
-    else:
-        git_diff_score = min(20, 5 + file_count * 3)
+    # ── No infra files detected ───────────────────────────────────────────────
+    if infra_file_count == 0:
+        return _make_result(
+            score=0,
+            severity="low",
+            confidence=0.98,
+            confidence_factors=["PR diff contains no infrastructure files — analysis skipped"],
+            findings=[],
+            reasons=[_NO_INFRA_MESSAGE],
+            recommendations=[],
+            context=context,
+            infra_file_count=0,
+            started_at=started_at,
+        )
 
-    severity_weights = {
-        "CRITICAL": 35,
-        "HIGH": 25,
-        "MEDIUM": 12,
-        "LOW": 4,
-    }
-    decay_multipliers = [1.0, 0.7, 0.5, 0.3]
+    # ── Dynamic scoring ───────────────────────────────────────────────────────
+    presence_score = _infra_presence_score(infra_file_count)
+    det_score, pre_existing_penalty = _score_findings(findings, patch_text)
+    synergy = _synergy_bonus(findings)
 
-    findings_by_severity: dict[str, list[Finding]] = {
-        "CRITICAL": [],
-        "HIGH": [],
-        "MEDIUM": [],
-        "LOW": [],
-    }
-
-    for f in findings:
-        sev = f.severity.upper()
-        if sev in findings_by_severity:
-            findings_by_severity[sev].append(f)
-        else:
-            findings_by_severity["MEDIUM"].append(f)
-
-    deterministic_findings_score = 0.0
-    pre_existing_penalty = 0.0
-
-    for sev, group in findings_by_severity.items():
-        base_w = severity_weights.get(sev, 10)
-        for idx, finding in enumerate(group):
-            mult = decay_multipliers[min(idx, len(decay_multipliers) - 1)]
-            effective_weight = base_w * mult
-            
-            matched_str = str((finding.evidence or {}).get("matched") or "").strip()
-            is_new = bool(matched_str and matched_str in patch_text) if patch_text else True
-
-            if is_new:
-                deterministic_findings_score += effective_weight
-            else:
-                deterministic_findings_score += effective_weight * 0.20
-                pre_existing_penalty += effective_weight * 0.80
-
-    deterministic_findings_score = round(deterministic_findings_score)
-    pre_existing_penalty = round(pre_existing_penalty)
-
-    # Synergy Bonuses (Compound Risk)
-    rule_ids = {f.rule_id for f in findings}
-    synergy_bonus = 0
-
-    if "DOCKER_ROOT_USER" in rule_ids and ("DOCKER_LATEST_TAG" in rule_ids or "DOCKER_REMOVED_NON_ROOT_USER" in rule_ids or "DOCKER_MISSING_HEALTHCHECK" in rule_ids):
-        synergy_bonus += 15
-    if "TERRAFORM_PUBLIC_S3" in rule_ids and ("TERRAFORM_OPEN_SSH" in rule_ids or "TERRAFORM_WILDCARD_IAM" in rule_ids or "TERRAFORM_PUBLIC_DB" in rule_ids):
-        synergy_bonus += 20
-    if "K8S_PRIVILEGED_POD" in rule_ids and ("K8S_HOST_NETWORK" in rule_ids or "K8S_UNSAFE_VOLUME_MOUNT" in rule_ids):
-        synergy_bonus += 15
-    if ("HARDCODED_AWS_CREDENTIALS" in rule_ids or "HARDCODED_SECRET" in rule_ids or "DOCKER_EXPOSED_SECRET" in rule_ids) and ("TERRAFORM_PUBLIC_S3" in rule_ids or "TERRAFORM_OPEN_SSH" in rule_ids):
-        synergy_bonus += 25
-    if len([f for f in findings if f.severity.upper() in {"CRITICAL", "HIGH"}]) >= 2:
-        synergy_bonus += 10
-
-    # PR Metadata Contribution
-    text_content = str(context.get("text") or "").lower()
+    # Urgency keywords in PR metadata (minimal contribution)
+    pr_meta_text = context.get("text", "")
     metadata_score = 0
-    if any(k in text_content for k in ("hotfix", "urgent", "bypass", "emergency")):
-        metadata_score += 3
+    if any(kw in pr_meta_text for kw in ("hotfix", "urgent", "bypass", "emergency", "skip review")):
+        metadata_score = 3
 
-    # Total score calculation
-    raw_total = git_diff_score + deterministic_findings_score + synergy_bonus + metadata_score
-    score = int(max(0, min(100, raw_total)))
-
-    # Target distribution overrides for specific high-risk scenarios
-    if "HARDCODED_AWS_CREDENTIALS" in rule_ids or "HARDCODED_SECRET" in rule_ids:
-        score = 100
-    elif "TERRAFORM_OPEN_SSH" in rule_ids:
-        score = max(score, 95)
-    elif "TERRAFORM_PUBLIC_S3" in rule_ids:
-        score = max(score, 92)
-    elif "K8S_PRIVILEGED_POD" in rule_ids:
-        score = max(score, 88)
-    elif "DOCKER_ROOT_USER" in rule_ids and "DOCKER_LATEST_TAG" in rule_ids:
-        score = max(score, 78)
-    elif "DOCKER_ROOT_USER" in rule_ids:
-        score = max(score, 65)
-    elif "GITHUB_ACTIONS_EXCESSIVE_PERMISSIONS" in rule_ids or "GITHUB_ACTIONS_UNPINNED" in rule_ids:
-        score = max(score, 65)
+    raw_total = presence_score + det_score + synergy + metadata_score
+    score = int(max(0, min(100, round(raw_total))))
 
     if not findings:
-        score = 0
+        score = max(0, min(5, presence_score + metadata_score))
 
-    if score >= 85 or any(f.severity.upper() == "CRITICAL" for f in findings):
-        severity = "critical"
-    elif score >= 50 or any(f.severity.upper() == "HIGH" for f in findings):
-        severity = "high"
-    elif score >= 20 or any(f.severity.upper() == "MEDIUM" for f in findings):
-        severity = "medium"
-    else:
-        severity = "low"
+    severity = _severity_label(score, findings)
+    has_diff = bool(patch_text.strip() or files)
+    confidence, confidence_factors = _compute_confidence(has_diff, findings, infra_file_count)
 
-    # Confidence computation
-    confidence_factors = []
-    if has_diff:
-        confidence_factors.append("Infrastructure diff evaluated")
-    if context.get("pull_request") or context.get("head_commit"):
-        confidence_factors.append("PR metadata available")
-    if findings:
-        confidence_factors.append("IaC security rules evaluated")
-    else:
-        confidence_factors.append("No infrastructure misconfigurations detected")
-
-    if has_diff and findings:
-        confidence = 0.95
-    elif has_diff:
-        confidence = 0.92
-    elif findings:
-        confidence = 0.70
-    else:
-        confidence = 0.40
+    reasons = [f.reason for f in findings]
+    recommendations = [f.recommendation for f in findings]
 
     breakdown = {
-        "git_diff": int(git_diff_score),
-        "deterministic_findings": int(deterministic_findings_score),
-        "repository_context": 0,
-        "incident_history": 0,
+        "infra_file_presence": int(presence_score),
+        "deterministic_findings": int(det_score),
+        "synergy_bonus": int(synergy),
         "metadata": int(metadata_score),
-        "synergy_bonus": int(synergy_bonus),
         "pre_existing_penalty": int(pre_existing_penalty),
     }
 
-    reasons = [finding.reason for finding in findings]
-    recommendations = [finding.recommendation for finding in findings]
-    deterministic_findings_dicts = [f.to_dict() for f in findings]
-
     execution_time_ms = round((time.perf_counter() - started_at) * 1000, 2)
-    logger.info("Final score: %s severity=%s confidence=%.2f execution_time_ms=%s", score, severity, confidence, execution_time_ms)
+    logger.info(
+        "Infra analysis complete: score=%s severity=%s findings=%d files=%d execution_ms=%s",
+        score, severity, len(findings), infra_file_count, execution_time_ms,
+    )
+
+    return _make_result(
+        score=score,
+        severity=severity,
+        confidence=confidence,
+        confidence_factors=confidence_factors,
+        findings=findings,
+        reasons=reasons,
+        recommendations=recommendations,
+        context=context,
+        infra_file_count=infra_file_count,
+        started_at=started_at,
+        breakdown=breakdown,
+        infra_files_seen=infra_files_seen,
+    )
+
+
+def _make_result(
+    *,
+    score: int,
+    severity: str,
+    confidence: float,
+    confidence_factors: list[str],
+    findings: list[Finding],
+    reasons: list[str],
+    recommendations: list[str],
+    context: dict[str, Any],
+    infra_file_count: int,
+    started_at: float,
+    breakdown: dict[str, Any] | None = None,
+    infra_files_seen: list[str] | None = None,
+) -> dict[str, Any]:
+    det_dicts = [f.to_dict() for f in findings]
+    execution_time_ms = round((time.perf_counter() - started_at) * 1000, 2)
+
+    if breakdown is None:
+        breakdown = {
+            "infra_file_presence": 0,
+            "deterministic_findings": 0,
+            "synergy_bonus": 0,
+            "metadata": 0,
+            "pre_existing_penalty": 0,
+        }
+
+    # Keep legacy breakdown keys for aggregator compatibility
+    compat_breakdown = {
+        "git_diff": breakdown.get("infra_file_presence", 0),
+        "deterministic_findings": breakdown.get("deterministic_findings", 0),
+        "repository_context": 0,
+        "incident_history": 0,
+        "metadata": breakdown.get("metadata", 0),
+        "synergy_bonus": breakdown.get("synergy_bonus", 0),
+        "pre_existing_penalty": breakdown.get("pre_existing_penalty", 0),
+    }
 
     return {
-        "score": int(score),
+        "score": score,
         "severity": severity,
-        "confidence": float(confidence),
+        "confidence": confidence,
         "confidence_factors": confidence_factors,
         "reasons": reasons,
         "recommendations": recommendations,
-        "deterministic_findings": deterministic_findings_dicts,
-        "score_breakdown": breakdown,
+        "deterministic_findings": det_dicts,
+        "score_breakdown": compat_breakdown,
         "metadata": {
             "changed_files": context.get("changed_file_count"),
             "changed_lines": context.get("changed_line_count"),
+            "infra_files_analyzed": infra_file_count,
+            "infra_files": infra_files_seen or [],
             "pull_request_title": (context.get("pull_request") or {}).get("title"),
             "pull_request_body": (context.get("pull_request") or {}).get("body"),
             "commit_message": (context.get("head_commit") or {}).get("message"),
             "repository": (context.get("repository") or {}).get("name"),
             "source": "pull_request" if context.get("pull_request") else "commit",
-            "findings": deterministic_findings_dicts,
-            "deterministic_findings": deterministic_findings_dicts,
-            "score_breakdown": breakdown,
+            "findings": det_dicts,
+            "deterministic_findings": det_dicts,
+            "score_breakdown": compat_breakdown,
             "confidence_factors": confidence_factors,
+            "analysis_execution_ms": execution_time_ms,
         },
     }
-
-
