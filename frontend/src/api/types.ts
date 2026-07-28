@@ -107,8 +107,11 @@ export interface FinalDecision {
   correlation_id: string;
   overall_score: number;
   overall_confidence: number;
+  confidence_explanation?: string;
   decision: DeploymentDecision;
   severity: DeploymentSeverity;
+  why_this_score?: Record<string, any>;
+  risk_contributors?: Record<string, any>;
   agents: Partial<Record<AgentName, AgentResult>> & Record<string, AgentResult>;
   summary: string;
   reasons: string[];

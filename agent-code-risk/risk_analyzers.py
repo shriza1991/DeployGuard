@@ -328,6 +328,19 @@ class SecretCredentialAnalyzer(BaseAnalyzer):
         for file_name, line in _iter_changed_lines(context):
             if line.startswith("-"):
                 continue
+            if "AKIA" in line or "AWS_SECRET_ACCESS_KEY" in line or "AWS_SECRET" in line:
+                return AnalyzerFinding(
+                    score_delta=40,
+                    reason="Hardcoded AWS Access Key ID or Secret Access Key detected in patch.",
+                    recommendation="Remove AWS credentials immediately, rotate key pair, and inject via environment variables.",
+                    rule_id="HARDCODED_AWS_CREDENTIALS",
+                    category="secrets",
+                    subcategory="aws_credentials",
+                    policy_action="BLOCK",
+                    severity="CRITICAL",
+                    confidence=0.99,
+                    metadata={"file": file_name, "line": line.strip()},
+                )
             for pattern in SECRET_PATTERNS:
                 if pattern.search(line):
                     return AnalyzerFinding(

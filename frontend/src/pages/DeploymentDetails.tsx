@@ -376,6 +376,70 @@ export const DeploymentDetails: React.FC = () => {
         </div>
       </div>
 
+      {/* ===== EXECUTIVE SUMMARY CARD (TOP) ===== */}
+      {deployment.summary && (
+        <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px', background: 'rgba(192,193,255,0.03)', border: '1px solid rgba(192,193,255,0.12)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+            <Sparkles size={16} style={{ color: 'var(--accent-cyan)' }} />
+            <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Executive Deployment Review</h3>
+          </div>
+          <p style={{ fontSize: '13px', lineHeight: '1.6', color: 'var(--text-primary)', margin: 0 }}>
+            {deployment.summary}
+          </p>
+        </div>
+      )}
+
+      {/* ===== WHY THIS SCORE? / RISK CONTRIBUTORS ===== */}
+      {deployment.why_this_score && (
+        <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <Shield size={16} style={{ color: 'var(--accent-blue)' }} />
+            <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Why this score? (Risk Contributors)</h3>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+            <div style={{ padding: '14px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>Code Risk</div>
+              <div className="font-mono" style={{ fontSize: '18px', color: 'var(--accent-blue)', fontWeight: 700, margin: '4px 0' }}>
+                +{deployment.why_this_score.code_risk?.score ?? 0}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                {deployment.why_this_score.code_risk?.rationale}
+              </div>
+            </div>
+
+            <div style={{ padding: '14px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>Infrastructure</div>
+              <div className="font-mono" style={{ fontSize: '18px', color: 'var(--color-review)', fontWeight: 700, margin: '4px 0' }}>
+                +{deployment.why_this_score.infrastructure?.score ?? 0}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                {deployment.why_this_score.infrastructure?.rationale}
+              </div>
+            </div>
+
+            <div style={{ padding: '14px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>Incident History</div>
+              <div className="font-mono" style={{ fontSize: '18px', color: 'var(--accent-cyan)', fontWeight: 700, margin: '4px 0' }}>
+                +{deployment.why_this_score.incident_history?.score ?? 0}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                {deployment.why_this_score.incident_history?.rationale}
+              </div>
+            </div>
+
+            <div style={{ padding: '14px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '6px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>Cross-Agent Synergy</div>
+              <div className="font-mono" style={{ fontSize: '18px', color: 'var(--color-block)', fontWeight: 700, margin: '4px 0' }}>
+                +{deployment.why_this_score.cross_agent_correlation?.score ?? 0}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                {deployment.why_this_score.cross_agent_correlation?.rationale}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ===== PIPELINE TIMELINE ===== */}
       <div className="timeline-panel" style={{ padding: '20px', marginBottom: '20px' }}>
         <div className="timeline-header-bar">
