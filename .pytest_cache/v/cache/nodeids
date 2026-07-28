@@ -54,6 +54,7 @@
   "test_regression_suite.py::test_confidence_case_6_zero_incidents_high_confidence",
   "test_regression_suite.py::test_scenario_aws_secret_key",
   "test_regression_suite.py::test_scenario_dependency_update",
+  "test_regression_suite.py::test_scenario_nested_infrastructure_files_propagation",
   "test_regression_suite.py::test_scenario_open_ssh_ingress",
   "test_regression_suite.py::test_scenario_privileged_kubernetes",
   "test_regression_suite.py::test_scenario_public_s3_bucket",

@@ -120,18 +120,56 @@ def _build_analysis_context(payload: dict[str, Any]) -> dict[str, Any]:
     pr = payload.get("pull_request") or {}
     head_commit = payload.get("head_commit") or {}
 
+    seen_files: set[str] = set()
     files: list[dict[str, Any]] = []
-    for key in ("changed_files", "files", "diffs"):
-        candidate = payload.get(key)
-        if isinstance(candidate, list):
-            files.extend(candidate)
+
+    def _normalize_item(item: Any) -> dict[str, Any] | None:
+        if isinstance(item, str) and item.strip():
+            return {"filename": item.strip(), "patch": ""}
+        elif isinstance(item, dict):
+            fn = str(
+                item.get("filename")
+                or item.get("file_path")
+                or item.get("path")
+                or item.get("name")
+                or ""
+            ).strip()
+            patch = str(item.get("patch") or item.get("diff") or "")
+            if fn:
+                return {"filename": fn, "patch": patch}
+        return None
+
+    sources = [
+        payload.get("changed_files"),
+        payload.get("files"),
+        payload.get("diffs"),
+        pr.get("files"),
+        pr.get("changed_files"),
+        pr.get("diffs"),
+    ]
+
+    if isinstance(head_commit, dict):
+        commit_files = (head_commit.get("added") or []) + (head_commit.get("modified") or [])
+        if commit_files:
+            sources.append(commit_files)
+
+    for src in sources:
+        if isinstance(src, list):
+            for item in src:
+                norm = _normalize_item(item)
+                if norm and norm["filename"] not in seen_files:
+                    seen_files.add(norm["filename"])
+                    files.append(norm)
 
     # Single-file diff shorthand
     if isinstance(payload.get("diff"), str) and payload.get("diff"):
-        files.append({
-            "filename": payload.get("filename", "<diff>"),
-            "patch": payload["diff"],
-        })
+        fn = str(payload.get("filename") or "<diff>")
+        if fn not in seen_files:
+            seen_files.add(fn)
+            files.append({
+                "filename": fn,
+                "patch": payload["diff"],
+            })
 
     raw_cf = payload.get("changed_files")
     if isinstance(raw_cf, list):

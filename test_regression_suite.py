@@ -439,12 +439,53 @@ def test_confidence_case_5_format_safeguard():
     assert normalize_confidence(None) is None
 
 
+def test_scenario_nested_infrastructure_files_propagation():
+    """Verify that all nested infrastructure files are detected, propagated, and analyzed by the Infrastructure Risk Agent."""
+    payload = {
+        "repository": {"name": "myorg/nested-infra-app"},
+        "pull_request": {
+            "title": "infra: update docker, gha, k8s, and terraform configs",
+            "body": "Updates nested infrastructure configuration files across the repository.",
+            "files": [
+                {"filename": "docker/Dockerfile", "patch": "+ FROM python:3.11-slim\n+ USER root"},
+                {"filename": "docker/docker-compose.yml", "patch": "+   privileged: true"},
+                {"filename": ".github/workflows/ci.yml", "patch": "+     uses: actions/checkout@main"},
+                {"filename": "kubernetes/deployment.yaml", "patch": "+   containers:\n+     - name: app\n+       securityContext:\n+         privileged: true"},
+                {"filename": "terraform/main.tf", "patch": '+   acl = "public-read"'},
+            ],
+        },
+    }
+
+    infra_res = infra_risk_analyzer(payload)
+    metadata = infra_res.get("metadata", {})
+
+    assert metadata.get("infra_files_analyzed") == 5, f"Expected 5 infra files analyzed, got {metadata.get('infra_files_analyzed')}"
+    analyzed_files = metadata.get("infra_files", [])
+    expected_files = [
+        "docker/Dockerfile",
+        "docker/docker-compose.yml",
+        ".github/workflows/ci.yml",
+        "kubernetes/deployment.yaml",
+        "terraform/main.tf",
+    ]
+    for ef in expected_files:
+        assert ef in analyzed_files, f"Expected {ef} to be in analyzed infra files {analyzed_files}"
+
+    rule_ids = {f.get("rule_id") for f in infra_res.get("deterministic_findings", [])}
+    assert "DOCKER_ROOT_USER" in rule_ids, f"DOCKER_ROOT_USER missing from {rule_ids}"
+    assert "COMPOSE_PRIVILEGED" in rule_ids, f"COMPOSE_PRIVILEGED missing from {rule_ids}"
+    assert "GHA_UNPINNED_ACTION" in rule_ids, f"GHA_UNPINNED_ACTION missing from {rule_ids}"
+    assert "K8S_PRIVILEGED" in rule_ids or "K8S_PRIVILEGED_POD" in rule_ids, f"K8S privileged rule missing from {rule_ids}"
+    assert "TF_PUBLIC_S3" in rule_ids or "TERRAFORM_PUBLIC_S3" in rule_ids, f"TF_PUBLIC_S3 rule missing from {rule_ids}"
+
+
 def test_confidence_case_6_zero_incidents_high_confidence():
     """Case 6: 0 historical incidents matched with healthy search -> High confidence (>=0.90)"""
 
     conf, factors = incident_confidence(incidents=[], qdrant_available=True, embedding_quality="ok")
     assert conf >= 0.90, f"Expected 0 incidents with healthy search to yield confidence >= 0.90, got {conf}"
     assert "No historical incidents matched (clean record)" in factors
+
 
 
 if __name__ == "__main__":
