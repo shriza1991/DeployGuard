@@ -538,11 +538,41 @@ def analyze_infra_risk(payload: dict[str, Any]) -> dict[str, Any]:
         logger.info("%s → %s", filename, display_or_reason)
         infra_files_seen.append(filename)
 
+        if not analyzer_names:
+            logger.info("  Skipped analyzer invocation for '%s': no dedicated analyzer for category '%s'", filename, category)
+            continue
+
         for name in analyzer_names:
             analyzer = _ANALYZER_BY_NAME.get(name)
-            if analyzer:
-                results = analyzer.analyze(content, file_path=filename)
-                findings.extend(results)
+            if not analyzer:
+                logger.info("  Analyzer '%s' skipped: not registered in ANALYZERS registry", name)
+                continue
+
+            rich_rules = getattr(analyzer, "rich_rules", ())
+            rules = getattr(analyzer, "rules", ())
+            total_rules = len(rich_rules) + len(rules)
+            logger.info("  Selected analyzer: '%s' for file '%s' (evaluating %d rules)", name, filename, total_rules)
+
+            # Detailed rule pattern evaluation trace
+            for rr in rich_rules:
+                m = rr.match(content)
+                if m:
+                    logger.info("    Rule [%s] matched pattern '%s'", rr.rule_id, rr.pattern.pattern)
+                else:
+                    logger.info("    Rule [%s] pattern '%s' did NOT match content in '%s'", rr.rule_id, rr.pattern.pattern, filename)
+
+            for r_obj in rules:
+                m = r_obj.pattern.search(content)
+                if m:
+                    logger.info("    Rule [%s] matched pattern '%s'", r_obj.rule_id, r_obj.pattern.pattern)
+                else:
+                    logger.info("    Rule [%s] pattern '%s' did NOT match content in '%s'", r_obj.rule_id, r_obj.pattern.pattern, filename)
+
+            results = analyzer.analyze(content, file_path=filename)
+            logger.info("  Analyzer '%s' produced %d finding(s) for '%s'", name, len(results), filename)
+            for f in results:
+                logger.info("    → Finding: [%s] %s: %s", f.rule_id, f.severity, f.reason)
+            findings.extend(results)
 
     # Always run the secrets analyzer across ALL infra files (cross-cutting concern)
     secrets_analyzer = _ANALYZER_BY_NAME.get("secrets")
