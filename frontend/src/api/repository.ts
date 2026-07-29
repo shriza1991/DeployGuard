@@ -69,9 +69,8 @@ export async function getRepositoryStatus(
   repository: string,
   branch: string = 'main'
 ): Promise<RepoStatusResponse> {
-  const normRepo = repository.split('/').pop() ?? repository;
   const { data } = await repoContextClient.get<RepoStatusResponse>(
-    `/repository/status/${encodeURIComponent(normRepo)}`,
+    `/repository/status/${repository}`,
     { params: { branch } }
   );
   return data;
@@ -81,9 +80,8 @@ export async function getRepositoryManifest(
   repository: string,
   branch: string = 'main'
 ): Promise<RepoManifestResponse> {
-  const normRepo = repository.split('/').pop() ?? repository;
   const { data } = await repoContextClient.get<RepoManifestResponse>(
-    `/repository/manifest/${encodeURIComponent(normRepo)}`,
+    `/repository/manifest/${repository}`,
     { params: { branch } }
   );
   return data;
@@ -93,9 +91,8 @@ export async function getRepositoryStats(
   repository: string,
   branch: string = 'main'
 ): Promise<RepoStatsResponse> {
-  const normRepo = repository.split('/').pop() ?? repository;
   const { data } = await repoContextClient.get<RepoStatsResponse>(
-    `/repository/stats/${encodeURIComponent(normRepo)}`,
+    `/repository/stats/${repository}`,
     { params: { branch } }
   );
   return data;
@@ -152,10 +149,9 @@ export async function searchRepository(
   branch: string = 'main',
   top_k: number = 5
 ): Promise<SearchResponse> {
-  const normRepo = repository.split('/').pop() ?? repository;
   const { data } = await repoContextClient.post<any>(
     '/repository/search',
-    { repository: normRepo, query, branch, top_k }
+    { repository, query, branch, top_k }
   );
 
   const rawResults: any[] = Array.isArray(data?.results) ? data.results : [];
