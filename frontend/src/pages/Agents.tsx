@@ -187,7 +187,7 @@ export const Agents: React.FC = () => {
                   <div style={{ marginTop: 'auto' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', color: 'var(--text-secondary)' }}>
                       <Terminal size={12} style={{ color: 'var(--accent-cyan)' }} />
-                      <span style={{ fontSize: '11px', fontWeight: 600 }} className="font-mono">CONSOLE LOGS:</span>
+                      <span style={{ fontSize: '11px', fontWeight: 600 }} className="font-mono">CONSOLE LOGS (Sample Stream):</span>
                     </div>
                     <div style={{ 
                       background: 'var(--bg-secondary)', 

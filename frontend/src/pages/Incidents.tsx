@@ -5,11 +5,12 @@ import {
   type IncidentRecord,
   type SimilarIncidentMatch,
 } from '../api/incidents';
-import { Search, Calculator, ShieldAlert, CheckCircle2, HelpCircle, History, AlertTriangle, AlertCircle, Info } from 'lucide-react';
+import { Search, Calculator, ShieldAlert, CheckCircle2, HelpCircle, History, AlertTriangle, AlertCircle, Info, RefreshCw } from 'lucide-react';
 import './IncidentHistory.css';
 
 export const Incidents: React.FC = () => {
   const [incidents, setIncidents] = useState<IncidentRecord[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -19,11 +20,14 @@ export const Incidents: React.FC = () => {
   const [similarityResults, setSimilarityResults] = useState<SimilarIncidentMatch[]>([]);
 
   const fetchIncidents = async () => {
+    setLoading(true);
     try {
       const response = await listIncidents();
       setIncidents(response.items);
     } catch (err) {
       console.error('Failed to load incidents:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -84,82 +88,99 @@ export const Incidents: React.FC = () => {
           </div>
 
           <div className="incidents-list">
-            {filteredIncidents.map((inc) => {
-              const sev = inc.severity.toLowerCase();
-              let SevIcon = Info;
-              if (sev === 'critical') SevIcon = AlertTriangle;
-              else if (sev === 'high') SevIcon = AlertCircle;
-              else if (sev === 'medium') SevIcon = Info;
-              else if (sev === 'low') SevIcon = CheckCircle2;
+            {loading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px', gap: '12px', color: 'var(--text-muted)' }}>
+                <RefreshCw size={20} className="spinning" />
+                <span className="font-mono" style={{ fontSize: '12px' }}>Loading incident database...</span>
+              </div>
+            ) : filteredIncidents.length === 0 ? (
+              <div style={{ padding: '36px 16px', textAlign: 'center', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                <HelpCircle size={24} style={{ opacity: 0.4 }} />
+                <span style={{ fontSize: '13px' }}>No incidents match your search query</span>
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="btn-secondary-stitch font-mono" style={{ fontSize: '11px', marginTop: '4px' }}>
+                    Clear Search Filter
+                  </button>
+                )}
+              </div>
+            ) : (
+              filteredIncidents.map((inc) => {
+                const sev = inc.severity.toLowerCase();
+                let SevIcon = Info;
+                if (sev === 'critical') SevIcon = AlertTriangle;
+                else if (sev === 'high') SevIcon = AlertCircle;
+                else if (sev === 'medium') SevIcon = Info;
+                else if (sev === 'low') SevIcon = CheckCircle2;
 
-              const isExpanded = expandedId === inc.incident_id;
+                const isExpanded = expandedId === inc.incident_id;
 
-              return (
-                <div
-                  key={inc.incident_id}
-                  className="incident-card"
-                  onClick={() => setExpandedId(isExpanded ? null : inc.incident_id)}
-                >
-                  <div className="incident-card-top">
-                    <span className="inc-id">{inc.incident_id}</span>
-                    <span className={`sev-badge ${sev}`}>
-                      <SevIcon className="sev-badge-icon" />
-                      {sev === 'critical' ? 'CRIT' : sev.toUpperCase()}
-                    </span>
-                  </div>
-                  <h3 className="inc-title">{inc.title}</h3>
-                  <p className="inc-desc">{inc.description}</p>
-                  <div className="incident-card-bottom">
-                    <span className="inc-service">Service: <span>{inc.service}</span></span>
-                    <span className="inc-env">Env: <span>{inc.environment}</span></span>
-                    <span style={{ marginLeft: 'auto', color: 'var(--accent-cyan)' }}>
-                      {isExpanded ? '▲ Hide Details' : '▼ Expand Details'}
-                    </span>
-                  </div>
+                return (
+                  <div
+                    key={inc.incident_id}
+                    className="incident-card"
+                    onClick={() => setExpandedId(isExpanded ? null : inc.incident_id)}
+                  >
+                    <div className="incident-card-top">
+                      <span className="inc-id">{inc.incident_id}</span>
+                      <span className={`sev-badge ${sev}`}>
+                        <SevIcon className="sev-badge-icon" />
+                        {sev === 'critical' ? 'CRIT' : sev.toUpperCase()}
+                      </span>
+                    </div>
+                    <h3 className="inc-title">{inc.title}</h3>
+                    <p className="inc-desc">{inc.description}</p>
+                    <div className="incident-card-bottom">
+                      <span className="inc-service">Service: <span>{inc.service}</span></span>
+                      <span className="inc-env">Env: <span>{inc.environment}</span></span>
+                      <span style={{ marginLeft: 'auto', color: 'var(--accent-cyan)' }}>
+                        {isExpanded ? '▲ Hide Details' : '▼ Expand Details'}
+                      </span>
+                    </div>
 
-                  {isExpanded && (
-                    <div className="incident-expanded-details" onClick={(e) => e.stopPropagation()}>
-                      {inc.root_cause && (
-                        <div className="detail-block">
-                          <span className="detail-label">Root Cause</span>
-                          <span className="detail-value">{inc.root_cause}</span>
-                        </div>
-                      )}
+                    {isExpanded && (
+                      <div className="incident-expanded-details" onClick={(e) => e.stopPropagation()}>
+                        {inc.root_cause && (
+                          <div className="detail-block">
+                            <span className="detail-label">Root Cause</span>
+                            <span className="detail-value">{inc.root_cause}</span>
+                          </div>
+                        )}
 
-                      {inc.summary && (
-                        <div className="detail-block">
-                          <span className="detail-label">AI Intelligence Summary</span>
-                          <span className="detail-value">{inc.summary}</span>
-                        </div>
-                      )}
+                        {inc.summary && (
+                          <div className="detail-block">
+                            <span className="detail-label">AI Intelligence Summary</span>
+                            <span className="detail-value">{inc.summary}</span>
+                          </div>
+                        )}
 
-                      {inc.resolution && (
-                        <div className="detail-block">
-                          <span className="detail-label">Resolution</span>
-                          <span className="detail-value">{inc.resolution}</span>
-                        </div>
-                      )}
+                        {inc.resolution && (
+                          <div className="detail-block">
+                            <span className="detail-label">Resolution</span>
+                            <span className="detail-value">{inc.resolution}</span>
+                          </div>
+                        )}
 
-                      <div className="detail-row">
-                        <div className="detail-block">
-                          <span className="detail-label">Rollback Executed</span>
-                          <span className="detail-value" style={{ color: inc.rollback ? 'var(--color-block)' : 'var(--color-safe)' }}>
-                            {inc.rollback ? 'YES (Rollback Triggered)' : 'NO'}
-                          </span>
-                        </div>
+                        <div className="detail-row">
+                          <div className="detail-block">
+                            <span className="detail-label">Rollback Executed</span>
+                            <span className="detail-value" style={{ color: inc.rollback ? 'var(--color-block)' : 'var(--color-safe)' }}>
+                              {inc.rollback ? 'YES (Rollback Triggered)' : 'NO'}
+                            </span>
+                          </div>
 
-                        <div className="detail-block">
-                          <span className="detail-label">Related Target</span>
-                          <span className="detail-value font-mono">
-                            {inc.service} ({inc.environment})
-                          </span>
+                          <div className="detail-block">
+                            <span className="detail-label">Related Target</span>
+                            <span className="detail-value font-mono">
+                              {inc.service} ({inc.environment})
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
         </section>
 

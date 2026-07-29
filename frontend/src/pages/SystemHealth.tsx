@@ -83,7 +83,7 @@ export const SystemHealth: React.FC = () => {
             <h1>Infrastructure System Health</h1>
           </div>
           <p className="description">
-            Live telemetry, active service endpoints, and resource metric logs.
+            Live telemetry, active service endpoints, and resource metric logs (Simulated Telemetry).
           </p>
         </div>
       </div>

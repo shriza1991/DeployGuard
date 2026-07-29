@@ -37,7 +37,7 @@ export const Settings: React.FC = () => {
             <h1>Settings &amp; Policies</h1>
           </div>
           <p className="description">
-            Configure risk thresholds, notifications routing, and telemetry rules.
+            Configure risk thresholds, notifications routing, and telemetry rules (Demo Session Preferences).
           </p>
         </div>
       </div>
