@@ -101,6 +101,51 @@ export async function getRepositoryStats(
   return data;
 }
 
+function normalizeSearchHit(rawHit: any, index: number): SearchHit {
+  const metadata = rawHit?.metadata ?? {};
+  const payloadSrc = rawHit?.payload ?? metadata;
+
+  const relativePath = payloadSrc?.relative_path ?? metadata?.relative_path ?? '';
+  const filename =
+    payloadSrc?.filename ??
+    metadata?.filename ??
+    (relativePath ? relativePath.split('/').pop() ?? '' : 'Untitled');
+  const directory = payloadSrc?.directory ?? metadata?.directory ?? '';
+  const kind = payloadSrc?.kind ?? metadata?.kind ?? 'source';
+  const text = rawHit?.text ?? payloadSrc?.text ?? metadata?.text ?? '';
+  const language = payloadSrc?.language ?? metadata?.language ?? 'unknown';
+  const startLine = payloadSrc?.start_line ?? metadata?.start_line ?? 0;
+  const endLine = payloadSrc?.end_line ?? metadata?.end_line ?? 0;
+
+  const id =
+    rawHit?.id ??
+    (relativePath
+      ? `${relativePath}:${startLine}-${endLine}:${index}`
+      : `chunk-${index}`);
+  const score = typeof rawHit?.score === 'number' ? rawHit.score : 0.0;
+  const rankingScore =
+    typeof rawHit?.ranking_score === 'number' ? rawHit.ranking_score : score;
+  const retrievalReason =
+    rawHit?.retrieval_reason ?? rawHit?.reason_for_match ?? 'Semantic Similarity';
+
+  return {
+    id,
+    score,
+    ranking_score: rankingScore,
+    retrieval_reason: retrievalReason,
+    payload: {
+      relative_path: relativePath,
+      filename,
+      directory,
+      kind,
+      text,
+      language,
+      start_line: startLine,
+      end_line: endLine,
+    },
+  };
+}
+
 export async function searchRepository(
   repository: string,
   query: string,
@@ -108,9 +153,21 @@ export async function searchRepository(
   top_k: number = 5
 ): Promise<SearchResponse> {
   const normRepo = repository.split('/').pop() ?? repository;
-  const { data } = await repoContextClient.post<SearchResponse>(
+  const { data } = await repoContextClient.post<any>(
     '/repository/search',
     { repository: normRepo, query, branch, top_k }
   );
-  return data;
+
+  const rawResults: any[] = Array.isArray(data?.results) ? data.results : [];
+  const normalizedResults: SearchHit[] = rawResults.map((hit, idx) =>
+    normalizeSearchHit(hit, idx)
+  );
+
+  return {
+    results: normalizedResults,
+    query: data?.query ?? query,
+    repository: data?.repository ?? repository,
+    branch: data?.branch ?? branch,
+  };
 }
+
