@@ -123,6 +123,8 @@ services:
     build:
       context: ./aggregator
     image: shriza1991/deployguard-aggregator:latest
+    volumes:
+      - ./agent-incident-history/incident_seeding:/app/incident_seeding
     container_name: deployguard_aggregator
     ports:
       - "8002:8002"
