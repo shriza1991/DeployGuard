@@ -6,12 +6,13 @@ import {
   type SimilarIncidentMatch,
 } from '../api/incidents';
 import { Search, Calculator, ShieldAlert, CheckCircle2, HelpCircle, History, AlertTriangle, AlertCircle, Info } from 'lucide-react';
-import './IncidentHistory.css'; // Keep using the stylesheet
+import './IncidentHistory.css';
 
 export const Incidents: React.FC = () => {
   const [incidents, setIncidents] = useState<IncidentRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
   // Playground states
   const [playgroundText, setPlaygroundText] = useState('feat: Add database migrations and disable oauth validation temporarily');
   const [calculating, setCalculating] = useState(false);
@@ -34,7 +35,7 @@ export const Incidents: React.FC = () => {
     setSearchQuery(e.target.value);
   };
 
-  const filteredIncidents = incidents.filter(inc => 
+  const filteredIncidents = incidents.filter(inc =>
     inc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     inc.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
     inc.service.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -60,31 +61,29 @@ export const Incidents: React.FC = () => {
     <div className="incident-history-container fade-in">
       <div className="incident-history-header">
         <h1>
-          <History className="header-icon text-rose" />
-          Outages &amp; Incidents Archive
+          <History className="header-icon" />
+          Historical Incident Intelligence
         </h1>
-        <p>Browse historical system failures and perform real-time vector matches against proposed pull requests.</p>
+        <p>Analyze historical failures and perform real-time regression vector lookups against previous outages.</p>
       </div>
 
       <div className="history-grid-layout">
-        {/* Left Pane: Outages database */}
+        {/* Left Pane: Seeded Incidents Database */}
         <section className="incidents-db-panel">
           <div className="panel-header-row">
-            <h2>Incident Database ({filteredIncidents.length})</h2>
+            <h2>Outage Database ({filteredIncidents.length})</h2>
             <div className="search-input-wrapper">
               <Search className="search-icon" />
-              <input 
-                type="text" 
-                placeholder="Search database..." 
+              <input
+                type="text"
+                placeholder="Search incidents..."
                 value={searchQuery}
                 onChange={handleSearch}
-                style={{ width: '100%', padding: '8px 12px 8px 32px', background: 'var(--bg-secondary)', border: '1px solid var(--panel-border)', borderRadius: '6px', color: 'var(--text-primary)' }}
-                className="font-mono"
               />
             </div>
           </div>
 
-          <div className="incidents-list" style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+          <div className="incidents-list">
             {filteredIncidents.map((inc) => {
               const sev = inc.severity.toLowerCase();
               let SevIcon = Info;
@@ -93,28 +92,71 @@ export const Incidents: React.FC = () => {
               else if (sev === 'medium') SevIcon = Info;
               else if (sev === 'low') SevIcon = CheckCircle2;
 
+              const isExpanded = expandedId === inc.incident_id;
+
               return (
-                <div key={inc.incident_id} className="incident-card" style={{ padding: '16px', background: 'var(--panel-bg)', border: '1px solid var(--panel-border)', borderRadius: '8px' }}>
-                  <div className="incident-card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <span className="inc-id font-mono" style={{ fontWeight: 'bold', color: 'var(--accent-cyan)' }}>{inc.incident_id}</span>
-                    <span className={`sev-badge ${sev}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <SevIcon className="sev-badge-icon" size={12} />
+                <div
+                  key={inc.incident_id}
+                  className="incident-card"
+                  onClick={() => setExpandedId(isExpanded ? null : inc.incident_id)}
+                >
+                  <div className="incident-card-top">
+                    <span className="inc-id">{inc.incident_id}</span>
+                    <span className={`sev-badge ${sev}`}>
+                      <SevIcon className="sev-badge-icon" />
                       {sev === 'critical' ? 'CRIT' : sev.toUpperCase()}
                     </span>
                   </div>
-                  <h3 className="inc-title" style={{ fontSize: '14px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{inc.title}</h3>
-                  <p className="inc-desc" style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>{inc.description}</p>
-                  
-                  {inc.root_cause && (
-                    <div style={{ background: 'var(--bg-secondary)', padding: '8px', borderRadius: '4px', marginTop: '8px', fontSize: '11px' }} className="font-mono">
-                      <span className="text-rose">Root Cause:</span> {inc.root_cause}
+                  <h3 className="inc-title">{inc.title}</h3>
+                  <p className="inc-desc">{inc.description}</p>
+                  <div className="incident-card-bottom">
+                    <span className="inc-service">Service: <span>{inc.service}</span></span>
+                    <span className="inc-env">Env: <span>{inc.environment}</span></span>
+                    <span style={{ marginLeft: 'auto', color: 'var(--accent-cyan)' }}>
+                      {isExpanded ? '▲ Hide Details' : '▼ Expand Details'}
+                    </span>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="incident-expanded-details" onClick={(e) => e.stopPropagation()}>
+                      {inc.root_cause && (
+                        <div className="detail-block">
+                          <span className="detail-label">Root Cause</span>
+                          <span className="detail-value">{inc.root_cause}</span>
+                        </div>
+                      )}
+
+                      {inc.summary && (
+                        <div className="detail-block">
+                          <span className="detail-label">AI Intelligence Summary</span>
+                          <span className="detail-value">{inc.summary}</span>
+                        </div>
+                      )}
+
+                      {inc.resolution && (
+                        <div className="detail-block">
+                          <span className="detail-label">Resolution</span>
+                          <span className="detail-value">{inc.resolution}</span>
+                        </div>
+                      )}
+
+                      <div className="detail-row">
+                        <div className="detail-block">
+                          <span className="detail-label">Rollback Executed</span>
+                          <span className="detail-value" style={{ color: inc.rollback ? 'var(--color-block)' : 'var(--color-safe)' }}>
+                            {inc.rollback ? 'YES (Rollback Triggered)' : 'NO'}
+                          </span>
+                        </div>
+
+                        <div className="detail-block">
+                          <span className="detail-label">Related Target</span>
+                          <span className="detail-value font-mono">
+                            {inc.service} ({inc.environment})
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   )}
-
-                  <div className="incident-card-bottom" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                    <span className="inc-service">Service: <span style={{ color: '#fff' }}>{inc.service}</span></span>
-                    <span className="inc-env">Env: <span style={{ color: '#fff' }}>{inc.environment}</span></span>
-                  </div>
                 </div>
               );
             })}
@@ -123,30 +165,30 @@ export const Incidents: React.FC = () => {
 
         {/* Right Pane: Similarity Lookup Playground */}
         <section className="similarity-playground-panel">
-          <h2>Semantic Similarity Playground</h2>
+          <h2>Historical Incident Intelligence Search</h2>
           <p className="section-desc">Generate query embeddings on the fly and perform vector matching against historical incidents.</p>
 
-          <form onSubmit={runSimilarityPlayground} className="playground-form" style={{ marginTop: '16px' }}>
-            <div className="form-group font-mono">
+          <form onSubmit={runSimilarityPlayground} className="playground-form">
+            <div className="form-group">
               <label>Deployment Description / Commit Message</label>
-              <textarea 
-                rows={4} 
-                value={playgroundText} 
-                onChange={(e) => setPlaygroundText(e.target.value)} 
-                required 
+              <textarea
+                rows={4}
+                value={playgroundText}
+                onChange={(e) => setPlaygroundText(e.target.value)}
+                required
               />
             </div>
 
-            <button type="submit" className="calculate-btn font-mono" style={{ marginTop: '12px', width: '100%', justifyContent: 'center' }} disabled={calculating}>
+            <button type="submit" className="calculate-btn" disabled={calculating}>
               <Calculator className="btn-icon" />
-              <span>{calculating ? 'Analyzing Vector Space...' : 'Perform Semantic Search'}</span>
+              <span>{calculating ? 'Analyzing Vector Space...' : 'Perform Intelligence Search'}</span>
             </button>
           </form>
 
           {/* Results display */}
-          <div className="similarity-results-container" style={{ marginTop: '24px' }}>
-            <h3>Matching Vector Hits</h3>
-            <p className="threshold-info">Matching threshold is set to <span style={{ color: 'var(--accent-cyan)', fontWeight: 'bold' }}>0.50</span>.</p>
+          <div className="similarity-results-container">
+            <h3>Vector Similarity Matches</h3>
+            <p className="threshold-info">Matching threshold is set to <span>0.50</span>.</p>
 
             {similarityResults.length === 0 ? (
               <div className="results-placeholder">
@@ -154,37 +196,43 @@ export const Incidents: React.FC = () => {
                 <span>Type a message above and run similarity analysis to find matching incidents in vector space.</span>
               </div>
             ) : (
-              <div className="results-list" style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+              <div className="results-list">
                 {similarityResults.map((res) => {
                   const isMatched = (res.similarity || 0) >= 0.50;
                   return (
                     <div key={res.incident_id} className={`result-row ${isMatched ? 'matched' : 'unmatched'}`}>
-                      <div className="result-row-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div className="result-row-header">
                         <div className="result-id-group">
-                          <span className="res-id font-mono">{res.incident_id}</span>
+                          <span className="res-id">{res.incident_id}</span>
                           <h4 className="res-title">{res.title}</h4>
                         </div>
-                        <div className="score-badge-group font-mono" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span className="similarity-score-label" style={{ fontSize: '10px' }}>Match:</span>
-                          <span className={`similarity-score-val ${isMatched ? 'pass' : 'fail'}`} style={{ fontWeight: 'bold' }}>
+                        <div className="score-badge-group">
+                          <span className="similarity-score-label">Similarity:</span>
+                          <span className={`similarity-score-val ${isMatched ? 'pass' : 'fail'}`}>
                             {res.similarity}
                           </span>
                         </div>
                       </div>
-                      
-                      <div className="result-row-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+
+                      {res.root_cause && (
+                        <p style={{ fontSize: '11px', color: '#c7c4d7', margin: '4px 0 8px 0', lineHeight: 1.4 }}>
+                          <strong style={{ color: 'var(--text-muted)' }}>Root Cause:</strong> {res.root_cause}
+                        </p>
+                      )}
+
+                      <div className="result-row-footer">
                         {isMatched ? (
-                          <div className="verdict-banner matched" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <ShieldAlert className="banner-icon" size={12} />
-                            <span style={{ fontSize: '10px', fontWeight: 'bold' }}>RISK MATCH DETECTED</span>
+                          <div className="verdict-banner matched">
+                            <ShieldAlert className="banner-icon" />
+                            <span>RISK MATCH DETECTED</span>
                           </div>
                         ) : (
-                          <div className="verdict-banner unmatched" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <CheckCircle2 className="banner-icon" size={12} />
-                            <span style={{ fontSize: '10px', fontWeight: 'bold' }}>Below Threshold</span>
+                          <div className="verdict-banner unmatched">
+                            <CheckCircle2 className="banner-icon" />
+                            <span>Below Threshold</span>
                           </div>
                         )}
-                        <span className="res-service font-mono" style={{ fontSize: '11px' }}>{res.service}</span>
+                        <span className="res-service">{res.service}</span>
                       </div>
                     </div>
                   );
@@ -197,4 +245,5 @@ export const Incidents: React.FC = () => {
     </div>
   );
 };
+
 export default Incidents;

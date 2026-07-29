@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DeploymentEvent } from '../api/client';
 import { normalizeConfidence } from '../utils/confidence';
@@ -6,11 +7,11 @@ import {
   Search,
   CheckCircle2,
   AlertTriangle,
-  Sparkles,
   ChevronRight,
   X,
-  Plus,
-  Loader2,
+  Info,
+  BarChart3,
+  Terminal,
   Calendar,
   SlidersHorizontal,
   Download,
@@ -19,9 +20,6 @@ import {
   ShieldCheck,
   Ban,
   Eye,
-  Info,
-  Shield,
-  BarChart3,
 } from 'lucide-react';
 import {
   BarChart,
@@ -55,6 +53,7 @@ import type {
 import type { AnalyticsBlockRecord } from '../api/analytics';
 
 export const Analytics: React.FC = () => {
+  const navigate = useNavigate();
   const [deployments, setDeployments] = useState<DeploymentEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<AnalyticsSummaryResponse | null>(null);
@@ -70,16 +69,7 @@ export const Analytics: React.FC = () => {
   
   // Modals & Triggers
   const [selectedBlock, setSelectedBlock] = useState<AnalyticsBlockRecord | null>(null);
-  const [showNewDeploymentModal, setShowNewDeploymentModal] = useState(false);
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanStep, setScanStep] = useState(0);
   const [csvToast, setCsvToast] = useState<string | null>(null);
-
-  // Form state for custom simulation
-  const [newRepo, setNewRepo] = useState('myorg/payments-api');
-  const [newBranch, setNewBranch] = useState('main');
-  const [newThreatType, setNewThreatType] = useState('Hardcoded Stripe API Secret');
-  const [newRiskScore, setNewRiskScore] = useState(84);
 
   const fetchDeployments = useCallback(async () => {
     try {
@@ -294,56 +284,7 @@ const handleExportCSV = async () => {
   }
 };
 
-  const handleStartScanSimulation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsScanning(true);
-    setScanStep(0);
 
-    const steps = [
-      "Initializing DeployGuard pipeline hook...",
-      "Cloning branch and resolving infrastructure manifests...",
-      "Running Code Risk Agent scanner...",
-      "Running Infrastructure Configuration validator...",
-      "Executing Incident History validation matching...",
-      "DeployGuard threat analysis report calculated successfully!"
-    ];
-
-    const timer = setInterval(() => {
-      setScanStep(prev => {
-        if (prev < steps.length - 1) {
-          return prev + 1;
-        } else {
-          clearInterval(timer);
-          return prev;
-        }
-      });
-    }, 1100);
-
-    try {
-      // Trigger real Kafka backend pipeline check
-      await api.triggerDeployment(
-        newRepo,
-        `Simulated: ${newThreatType}`,
-        `DeployGuard scan simulation. Scanned issue: ${newThreatType}. Score set: ${newRiskScore}.`,
-        `fix: resolve ${newThreatType.toLowerCase()} on ${newBranch}`
-      );
-      
-      // Wait for simulator logs transition
-      await new Promise(resolve => setTimeout(resolve, 6600));
-      
-      // Reload deployments
-      await fetchDeployments();
-      
-      setIsScanning(false);
-      setShowNewDeploymentModal(false);
-      triggerToast(`Successfully simulated scan pipeline for ${newRepo}/${newBranch}!`);
-    } catch (err) {
-      console.error(err);
-      clearInterval(timer);
-      setIsScanning(false);
-      setShowNewDeploymentModal(false);
-    }
-  };
 
   const formatDate = (isoStr?: string) => {
     if (!isoStr) return '';
@@ -448,9 +389,9 @@ const handleExportCSV = async () => {
             Export CSV
           </button>
 
-          <button onClick={() => setShowNewDeploymentModal(true)} className="action-solid-btn font-mono">
-            <Plus className="btn-icon stroke-thick" />
-            Simulate Scan
+          <button onClick={() => navigate('/simulator')} className="action-solid-btn font-mono">
+            <Terminal className="btn-icon stroke-thick" />
+            Run Deployment Simulation
           </button>
         </div>
       </div>
@@ -1113,145 +1054,6 @@ const handleExportCSV = async () => {
         </div>
       )}
 
-      {/* MODAL 2: New Deployment Simulation Trigger */}
-      {showNewDeploymentModal && (
-        <div className="modal-overlay">
-          <div className="modal-backdrop" onClick={() => !isScanning && setShowNewDeploymentModal(false)} />
-          
-          <div className="modal-card scan-modal">
-            {/* Header */}
-            <div className="modal-header border-bottom">
-              <div className="modal-title-group">
-                <Sparkles className="modal-title-icon text-primary" />
-                <h3 className="modal-title font-sans">
-                  DeployGuard Pipeline Scanner
-                </h3>
-              </div>
-              {!isScanning && (
-                <button onClick={() => setShowNewDeploymentModal(false)} className="modal-close-x-btn">
-                  <X className="close-icon" />
-                </button>
-              )}
-            </div>
-
-            {isScanning ? (
-              /* Live scan steps indicator animation */
-              <div className="scanning-loader-wrapper">
-                <div className="spinner-center">
-                  <Loader2 className="spin loader-ring text-primary" />
-                  <Shield className="loader-shield text-primary" />
-                </div>
-                
-                <div className="loader-details-box">
-                  <p className="loader-status-text font-sans">
-                    Scanning code deployment commits...
-                  </p>
-                  
-                  {/* Interactive scanning logs console */}
-                  <div className="loader-console-logger font-mono border-outline-variant">
-                    <p className="log-line text-green">► pipeline: triggered via branch commit</p>
-                    {scanStep >= 1 && <p className="log-line text-primary">► system: code check initiated</p>}
-                    {scanStep >= 2 && <p className="log-line text-tertiary">► agent-code: scanning static configs...</p>}
-                    {scanStep >= 3 && <p className="log-line text-error">► agent-infra: checking ports & firewalls...</p>}
-                    {scanStep >= 4 && <p className="log-line text-grey">► agent-incident: comparing previous threat maps...</p>}
-                    {scanStep >= 5 && <p className="log-line text-green font-bold">► done: evaluation report generated</p>}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              /* Setup form */
-              <form onSubmit={handleStartScanSimulation} className="modal-form font-sans">
-                <p className="form-info-desc">
-                  Select repository context to simulate a GitHub commit hook. DeployGuard security agents will automatically inspect code configurations and compute risk telemetry.
-                </p>
-
-                <div className="form-inputs-group">
-                  {/* Repo select */}
-                  <div className="form-field-group">
-                    <label className="form-lbl font-mono">Target Repository</label>
-                    <select
-                      value={newRepo}
-                      onChange={(e) => setNewRepo(e.target.value)}
-                      className="form-select font-sans"
-                    >
-                      <option value="myorg/payments-api">myorg/payments-api</option>
-                      <option value="myorg/auth-service">myorg/auth-service</option>
-                      <option value="myorg/frontend-dashboard">myorg/frontend-dashboard</option>
-                    </select>
-                  </div>
-
-                  {/* Branch name */}
-                  <div className="form-field-group">
-                    <label className="form-lbl font-mono">Branch Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={newBranch}
-                      onChange={(e) => setNewBranch(e.target.value)}
-                      className="form-input font-mono text-white"
-                      placeholder="e.g. main, fix/auth"
-                    />
-                  </div>
-
-                  {/* Threat trigger selection */}
-                  <div className="form-field-group">
-                    <label className="form-lbl font-mono">Simulate Threat Trigger</label>
-                    <select
-                      value={newThreatType}
-                      onChange={(e) => {
-                        setNewThreatType(e.target.value);
-                        if (e.target.value.includes('AWS')) setNewRiskScore(91);
-                        else if (e.target.value.includes('Token')) setNewRiskScore(82);
-                        else if (e.target.value.includes('Public')) setNewRiskScore(95);
-                        else setNewRiskScore(76);
-                      }}
-                      className="form-select font-sans"
-                    >
-                      <option value="Hardcoded Slack Webhook Token">Hardcoded Slack Webhook Token (High)</option>
-                      <option value="Plaintext AWS Credentials in Commit">Plaintext AWS Credentials in Commit (Critical)</option>
-                      <option value="Public ElasticSearch Node Exposure">Public ElasticSearch Node Exposure (Critical)</option>
-                      <option value="Outdated vulnerable Log4j dependency">Outdated vulnerable Log4j dependency (Medium)</option>
-                    </select>
-                  </div>
-
-                  {/* Risk score slider */}
-                  <div className="form-field-group">
-                    <div className="slider-label-row font-mono">
-                      <span>Simulated Risk Score</span>
-                      <span className="slider-score-val text-error">{newRiskScore}/100</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="45"
-                      max="99"
-                      value={newRiskScore}
-                      onChange={(e) => setNewRiskScore(Number(e.target.value))}
-                      className="slider-input accent-primary"
-                    />
-                  </div>
-                </div>
-
-                <div className="modal-footer-row border-top">
-                  <button
-                    type="button"
-                    onClick={() => setShowNewDeploymentModal(false)}
-                    className="cancel-btn font-mono"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="submit-scan-btn font-mono"
-                  >
-                    <Shield className="shield-icon fill-primary" />
-                    Trigger Scan Hook
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };
