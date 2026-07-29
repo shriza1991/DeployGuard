@@ -43,6 +43,40 @@ def _parse_range_days(range_str: Optional[str]) -> int:
     return mapping.get(range_str or "7d", 7)
 
 
+def _decisions_in_timeframe(decisions: List[Dict[str, Any]], period: Optional[str]) -> List[Dict[str, Any]]:
+    """Filter decisions by timeframe using UTC timestamps. Defaults to 60-minute window."""
+    now = datetime.now(timezone.utc)
+    p = (period or "60m").lower()
+
+    if p in ("60m", "1h", "recent"):
+        cutoff = now - timedelta(minutes=60)
+    elif p in ("24h", "1d"):
+        cutoff = now - timedelta(hours=24)
+    elif p in ("7d", "1w"):
+        cutoff = now - timedelta(days=7)
+    elif p in ("14d", "2w"):
+        cutoff = now - timedelta(days=14)
+    elif p in ("30d", "1m"):
+        cutoff = now - timedelta(days=30)
+    elif p in ("90d", "3m"):
+        cutoff = now - timedelta(days=90)
+    else:
+        cutoff = now - timedelta(minutes=60)
+
+    result = []
+    for d in decisions:
+        generated_at = d.get("generated_at", "")
+        try:
+            dt = datetime.fromisoformat(generated_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt >= cutoff:
+                result.append(d)
+        except (ValueError, TypeError):
+            pass
+    return result
+
+
 def _decisions_in_range(decisions: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
     """Filter decisions to those generated within the last `days` days."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -224,10 +258,8 @@ def get_metrics(
     """Return aggregate deployment metrics computed from Redis."""
     all_decisions = redis_store.list_final_decisions()
 
-    # Filter by period if given
-    if period:
-        days = _parse_range_days(period)
-        all_decisions = _decisions_in_range(all_decisions, days)
+    # Filter by period timeframe (defaults to 60 minutes for recent dashboard window)
+    all_decisions = _decisions_in_timeframe(all_decisions, period)
 
     # Filter by project
     if project:

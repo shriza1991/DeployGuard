@@ -71,7 +71,7 @@ function formatRelativeTime(isoStr?: string): string {
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [timePeriod, setTimePeriod] = useState<'24h' | '7d' | '30d'>('7d');
+  const [timePeriod, setTimePeriod] = useState<'60m' | '24h' | '7d' | '30d'>('60m');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const prevDecisions = useRef<Record<string, string>>({});
   const lastRefresh = useRef<Date>(new Date());
@@ -103,7 +103,7 @@ export const Dashboard: React.FC = () => {
 
   const deploymentsQuery = useQuery({
     queryKey: ['dashboardDeployments'],
-    queryFn: () => listDeployments({ page: 1, page_size: 6 }),
+    queryFn: () => listDeployments({ page: 1, page_size: 20 }),
     refetchInterval: 5000, // Poll recent deployments every 5s
   });
 
@@ -155,7 +155,21 @@ export const Dashboard: React.FC = () => {
     refetchInterval: 5000, // Poll agents status every 5 seconds
   });
 
-  const deploymentsList = (deploymentsQuery.data?.items ?? []) as DeploymentSummary[];
+  const isWithin60Minutes = (isoStr?: string): boolean => {
+    if (!isoStr) return false;
+    try {
+      const dt = new Date(isoStr).getTime();
+      if (isNaN(dt)) return false;
+      const now = Date.now();
+      const sixtyMinsMs = 60 * 60 * 1000;
+      return (now - dt) <= sixtyMinsMs && dt <= (now + 60000);
+    } catch {
+      return false;
+    }
+  };
+
+  const rawDeploymentsList = (deploymentsQuery.data?.items ?? []) as DeploymentSummary[];
+  const deploymentsList = rawDeploymentsList.filter(dep => isWithin60Minutes(dep.generated_at)).slice(0, 6);
 
   // --- Calculations ---
   const total = metricsQuery.data?.total ?? 0;
@@ -237,13 +251,13 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <div className="timeframe-selector">
-            {(['24h', '7d', '30d'] as const).map(p => (
+            {(['60m', '24h', '7d', '30d'] as const).map(p => (
               <button
                 key={p}
                 onClick={() => setTimePeriod(p)}
                 className={`time-btn ${timePeriod === p ? 'active' : ''}`}
               >
-                {p === '24h' ? '24 Hours' : p === '7d' ? '7 Days' : '30 Days'}
+                {p === '60m' ? '60 Mins' : p === '24h' ? '24 Hours' : p === '7d' ? '7 Days' : '30 Days'}
               </button>
             ))}
           </div>

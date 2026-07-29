@@ -8,7 +8,7 @@ export type AgentSeverity = 'low' | 'medium' | 'high' | 'critical';
 
 export type AgentName = 'code-risk' | 'infra-risk' | 'incident-history';
 
-export type TimePeriod = '24h' | '7d' | '30d';
+export type TimePeriod = '60m' | '24h' | '7d' | '30d';
 
 export type AnalyticsRange = '7d' | '14d' | '30d' | '90d';
 
