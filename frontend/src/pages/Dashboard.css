@@ -871,3 +871,38 @@
   border-color: rgba(192, 193, 255, 0.2);
   color: #fff;
 }
+
+/* ══════════════════════════════════════════════════════
+   VISUAL FOCAL POINT — Latest Deployment Decisions
+══════════════════════════════════════════════════════ */
+.section-focal {
+  position: relative;
+}
+
+.focal-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.focal-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ds-primary);
+  box-shadow: 0 0 10px var(--ds-primary);
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+
+.focal-label {
+  color: #fff !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.12em !important;
+}
+
+.focal-panel {
+  border: 1px solid rgba(192, 193, 255, 0.25) !important;
+  background: linear-gradient(180deg, rgba(27, 27, 35, 0.95), rgba(19, 19, 27, 0.98)) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(192, 193, 255, 0.12) !important;
+}
+

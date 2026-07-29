@@ -28,12 +28,6 @@ import {
   Zap,
   RefreshCw,
   GitBranch,
-  Search,
-  TrendingUp,
-  Clock,
-  Play,
-  RotateCcw,
-  FileText,
 } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
 import { MetricCard } from '../components/MetricCard';
@@ -285,7 +279,7 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          SECTION 1 — EXECUTIVE HEADER
+          WIDGET 1 — EXECUTIVE HEADER
       ══════════════════════════════════════════════════════════ */}
       <div className="dashboard-header-container">
         <div className="dashboard-header-left">
@@ -296,7 +290,7 @@ export const Dashboard: React.FC = () => {
             <h1>Operations Center</h1>
           </div>
           <p className="description">
-            Real-time security auditing and deployment intelligence.
+            Real-time security auditing and deployment intelligence pipeline overview.
           </p>
         </div>
 
@@ -327,7 +321,7 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          SECTION 2 — EXECUTIVE SUMMARY CARDS
+          WIDGET 2 — EXECUTIVE SUMMARY
       ══════════════════════════════════════════════════════════ */}
       <div className="section-block">
         <div className="section-header">
@@ -385,17 +379,20 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          SECTION 3 — LATEST DEPLOYMENT DECISIONS
+          WIDGET 3 — LATEST DEPLOYMENT DECISIONS (VISUAL FOCAL POINT)
       ══════════════════════════════════════════════════════════ */}
-      <div className="section-block">
+      <div className="section-block section-focal">
         <div className="section-header">
-          <span className="section-label">Latest Deployment Decisions</span>
+          <div className="focal-title-group">
+            <span className="focal-pulse-dot" />
+            <span className="section-label focal-label">Latest Deployment Decisions</span>
+          </div>
           <button onClick={() => navigate('/deployments')} className="section-action-btn">
             View All <ChevronRight size={12} />
           </button>
         </div>
 
-        <div className="glass-panel" style={{ overflow: 'hidden' }}>
+        <div className="glass-panel focal-panel" style={{ overflow: 'hidden' }}>
           {deploymentsQuery.isLoading ? (
             <div className="dash-empty-state">
               <RefreshCw size={20} className="spinning" />
@@ -473,11 +470,11 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          SECTION 4 — REPOSITORY CONTEXT | PIPELINE HEALTH
+          TWO-COLUMN ROW A: WIDGET 4 (REPOSITORY CONTEXT) & WIDGET 5 (PIPELINE HEALTH)
       ══════════════════════════════════════════════════════════ */}
       <div className="dash-two-col">
 
-        {/* Repository Context */}
+        {/* WIDGET 4 — Repository Context */}
         <div className="section-block">
           <div className="section-header">
             <span className="section-label">Repository Context</span>
@@ -491,14 +488,14 @@ export const Dashboard: React.FC = () => {
             {(repoStatusQuery.isLoading || repoManifestQuery.isLoading || repoStatsQuery.isLoading) ? (
               <div className="dash-empty-state" style={{ padding: '28px' }}>
                 <RefreshCw size={16} className="spinning" />
-                <span style={{ fontSize: '12px' }}>Loading repository...</span>
+                <span style={{ fontSize: '12px' }}>Loading repository context...</span>
               </div>
             ) : (repoStatusQuery.isError || repoStatsQuery.isError) ? (
               <div className="dash-empty-state" style={{ padding: '24px', color: 'var(--ds-outline)', gap: '6px' }}>
                 <GitBranch size={20} style={{ opacity: 0.35 }} />
-                <span style={{ fontSize: '12px' }}>Repository not indexed</span>
+                <span style={{ fontSize: '12px' }}>Repository context not indexed</span>
                 <span style={{ fontSize: '11px', color: 'var(--ds-outline)', opacity: 0.7 }}>
-                  Trigger indexing to populate context
+                  Trigger repository indexing to view context
                 </span>
               </div>
             ) : (
@@ -530,7 +527,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Pipeline Health */}
+        {/* WIDGET 5 — Pipeline Health */}
         <div className="section-block">
           <div className="section-header">
             <span className="section-label">Pipeline Health</span>
@@ -567,11 +564,11 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          SECTION 5 — RECENT ACTIVITY | AI AGENT OVERVIEW
+          TWO-COLUMN ROW B: WIDGET 6 (RECENT ACTIVITY) & WIDGET 7 (AI AGENT OVERVIEW)
       ══════════════════════════════════════════════════════════ */}
       <div className="dash-two-col">
 
-        {/* Recent Activity Feed */}
+        {/* WIDGET 6 — Recent Activity */}
         <div className="section-block">
           <div className="section-header">
             <span className="section-label">Recent Activity</span>
@@ -581,7 +578,7 @@ export const Dashboard: React.FC = () => {
             {activityFeed.length === 0 ? (
               <div className="dash-empty-state" style={{ padding: '32px' }}>
                 <Zap size={22} className="empty-icon" />
-                <span style={{ fontSize: '12px' }}>No events yet — pipeline is idle</span>
+                <span style={{ fontSize: '12px' }}>No events recorded — pipeline is idle</span>
               </div>
             ) : (
               <div className="activity-list">
@@ -599,7 +596,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* AI Agent Overview */}
+        {/* WIDGET 7 — AI Agent Overview */}
         <div className="section-block">
           <div className="section-header">
             <span className="section-label">AI Agent Overview</span>
@@ -611,12 +608,12 @@ export const Dashboard: React.FC = () => {
             {agentStatusQuery.isLoading ? (
               <div className="dash-empty-state glass-panel" style={{ padding: '28px' }}>
                 <RefreshCw size={16} className="spinning" />
-                <span style={{ fontSize: '12px' }}>Loading agents...</span>
+                <span style={{ fontSize: '12px' }}>Connecting to agent fleet...</span>
               </div>
             ) : agentStatusQuery.isError || !agentStatusQuery.data?.agents?.length ? (
               <div className="dash-empty-state glass-panel" style={{ padding: '28px' }}>
                 <Bot size={22} className="empty-icon" />
-                <span style={{ fontSize: '12px' }}>No agent data available</span>
+                <span style={{ fontSize: '12px' }}>No agent status data available</span>
               </div>
             ) : (
               agentStatusQuery.data.agents.map((agent: AgentStatusItem) => {
@@ -663,93 +660,6 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-      </div>
-
-      {/* ══════════════════════════════════════════════════════════
-          SECTION 6 — QUICK ACTIONS (actions, not navigation)
-      ══════════════════════════════════════════════════════════ */}
-      <div className="section-block">
-        <div className="section-header">
-          <span className="section-label">Quick Actions</span>
-        </div>
-        <div className="quick-ops-grid">
-          <button
-            className="quick-op-btn quick-op-btn--primary"
-            onClick={() => navigate('/simulator')}
-          >
-            <Play size={14} />
-            <div>
-              <span className="quick-op-title">Run Simulation</span>
-              <span className="quick-op-desc">Trigger a deployment scan via webhook</span>
-            </div>
-          </button>
-          <button
-            className="quick-op-btn"
-            onClick={() => navigate('/search')}
-          >
-            <Search size={14} />
-            <div>
-              <span className="quick-op-title">Query Repository</span>
-              <span className="quick-op-desc">Vector search over indexed code</span>
-            </div>
-          </button>
-          <button
-            className="quick-op-btn"
-            onClick={() => {
-              deploymentsQuery.refetch();
-              metricsQuery.refetch();
-              agentStatusQuery.refetch();
-              showToast('Dashboard refreshed', 'info');
-            }}
-          >
-            <RotateCcw size={14} />
-            <div>
-              <span className="quick-op-title">Refresh Dashboard</span>
-              <span className="quick-op-desc">Re-poll all live data sources</span>
-            </div>
-          </button>
-          <button
-            className="quick-op-btn"
-            onClick={() => navigate('/deployments')}
-          >
-            <FileText size={14} />
-            <div>
-              <span className="quick-op-title">View All Deployments</span>
-              <span className="quick-op-desc">Full deployment history & filters</span>
-            </div>
-          </button>
-          <button
-            className="quick-op-btn"
-            onClick={() => navigate('/analytics')}
-          >
-            <TrendingUp size={14} />
-            <div>
-              <span className="quick-op-title">Open Analytics</span>
-              <span className="quick-op-desc">Historical trends and risk charts</span>
-            </div>
-          </button>
-          <button
-            className="quick-op-btn"
-            onClick={() => {
-              const ts = new Date().toISOString().replace('T', ' ').slice(0, 16);
-              const blob = new Blob(
-                [`DeployGuard Snapshot — ${ts}\n\nTotal: ${total} | Safe: ${safe} | Review: ${review} | Blocked: ${blocked}\nAvg Risk: ${avgRisk}/100 | Avg Confidence: ${confPct}%`],
-                { type: 'text/plain' }
-              );
-              const a = document.createElement('a');
-              a.href = URL.createObjectURL(blob);
-              a.download = `deployguard-snapshot-${Date.now()}.txt`;
-              a.click();
-              showToast('Snapshot exported', 'success');
-            }}
-          >
-            <Clock size={14} />
-            <div>
-              <span className="quick-op-title">Export Snapshot</span>
-              <span className="quick-op-desc">Download current metrics summary</span>
-            </div>
-          </button>
-        </div>
       </div>
 
     </div>
