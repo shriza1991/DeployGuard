@@ -36,11 +36,13 @@ export interface IncidentRecord {
   incident_id: string;
   title: string;
   description: string;
+  summary?: string;
   severity: IncidentSeverity;
   outcome: string;
   service: string;
   environment: string;
   root_cause?: string;
+  resolution?: string;
   rollback?: boolean;
   timestamp?: string;
   tags?: string[];
@@ -51,12 +53,14 @@ export interface SimilarIncidentMatch {
   incident_id: string;
   title: string;
   description: string;
+  summary?: string;
   severity: IncidentSeverity;
   outcome: string;
   service: string;
   environment: string;
   similarity: number;
   root_cause?: string;
+  resolution?: string;
   rollback?: boolean;
   timestamp?: string;
 }

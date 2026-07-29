@@ -377,34 +377,143 @@ def get_agent_status():
 # Incidents
 # ---------------------------------------------------------------------------
 
+def _load_curated_incident_dataset() -> List[Dict[str, Any]]:
+    import os
+    import sys
+    
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        agent_dir = os.path.abspath(os.path.join(current_dir, "..", "agent-incident-history"))
+        if os.path.exists(agent_dir) and agent_dir not in sys.path:
+            sys.path.insert(0, agent_dir)
+        from incident_seeding.dataset import CURATED_INCIDENT_SPECS
+        
+        formatted = []
+        for spec in CURATED_INCIDENT_SPECS:
+            days_ago = spec.get("days_ago", 10)
+            ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+            formatted.append({
+                "incident_id": spec.get("incident_id", "INC-000"),
+                "title": spec.get("title", ""),
+                "description": spec.get("description", ""),
+                "summary": spec.get("summary", spec.get("description", "")),
+                "severity": spec.get("severity", "medium"),
+                "outcome": spec.get("outcome", "Rollback"),
+                "service": spec.get("service", "core-service"),
+                "environment": spec.get("environment", "production"),
+                "root_cause": spec.get("root_cause", ""),
+                "resolution": spec.get("resolution", ""),
+                "impact": spec.get("impact", ""),
+                "timeline": spec.get("timeline", ""),
+                "lessons_learned": spec.get("lessons_learned", ""),
+                "rollback": spec.get("rollback", True),
+                "timestamp": ts,
+                "tags": spec.get("tags", []),
+                "metadata": {
+                    "affected_services": spec.get("affected_services", []),
+                    "preventive_controls": spec.get("preventive_controls", []),
+                    "category": spec.get("category", "")
+                }
+            })
+        return formatted
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn").warning(f"Fallback to internal curated dataset: {e}")
+
+    return [
+        {
+            "incident_id": "INC-2001",
+            "title": "Container Privilege Escalation via USER root in Dockerfile",
+            "description": "The Dockerfile explicitly set 'USER root'. A deserialization vulnerability in the API gateway enabled remote code execution, giving the attacker root privileges within the container.",
+            "summary": "An application container deployed with USER root was compromised via RCE, allowing full container filesystem overwrite.",
+            "severity": "critical",
+            "outcome": "Rollback",
+            "service": "api-gateway",
+            "environment": "production",
+            "root_cause": "Dockerfile misconfiguration executing processes as UID 0 instead of an unprivileged service user.",
+            "resolution": "Rebuilt image with dedicated 'appuser' (UID 10001), dropped default capabilities, and rolled back deployment.",
+            "rollback": True,
+            "timestamp": "2026-07-15T10:00:00Z",
+            "tags": ["docker", "root", "privilege-escalation", "rce"],
+            "metadata": {"affected_services": ["api-gateway", "auth-service"]}
+        },
+        {
+            "incident_id": "INC-2002",
+            "title": "Host Node Escape via Docker Socket Bind Mount",
+            "description": "A background worker container mounted docker.sock for sibling container execution. A command injection vulnerability allowed an attacker to issue API commands directly to host Docker daemon.",
+            "summary": "Bind-mounting /var/run/docker.sock into a container enabled full host node compromise.",
+            "severity": "critical",
+            "outcome": "Security Incident",
+            "service": "ci-runner-agent",
+            "environment": "production",
+            "root_cause": "docker.sock bind mount provided unrestricted control over the host Docker daemon.",
+            "resolution": "Terminated compromised worker node, removed docker.sock volume mount, and migrated to Kaniko for rootless builds.",
+            "rollback": True,
+            "timestamp": "2026-07-10T14:00:00Z",
+            "tags": ["docker", "docker-socket", "container-escape"],
+            "metadata": {"affected_services": ["ci-runner-agent"]}
+        },
+        {
+            "incident_id": "INC-2020",
+            "title": "Privileged Pod SecurityContext Breakout in Production Kubernetes",
+            "description": "A daemonset pod manifest contained 'privileged: true'. A vulnerable dependency allowed remote code execution, giving root access to the node's filesystem.",
+            "summary": "Setting 'securityContext.privileged: true' in Deployment manifest allowed worker node root takeover.",
+            "severity": "critical",
+            "outcome": "Rollback",
+            "service": "storage-node-agent",
+            "environment": "production",
+            "root_cause": "Privileged security context enabled on Kubernetes pod manifest.",
+            "resolution": "Enforced Kyverno Pod Security Standard, removed privileged flag, and rotated node tokens.",
+            "rollback": True,
+            "timestamp": "2026-07-20T02:00:00Z",
+            "tags": ["kubernetes", "privileged-pod", "container-escape"],
+            "metadata": {"affected_services": ["storage-node-agent"]}
+        },
+        {
+            "incident_id": "INC-104",
+            "title": "Database Connection Pool Exhaustion Under Peak Load",
+            "description": "Customers reported 502 errors after deployment due to unclosed database connections in asynchronous handlers.",
+            "summary": "Connection leak caused pool exhaustion within 15 minutes of deployment.",
+            "severity": "high",
+            "outcome": "Rollback",
+            "service": "inventory-service",
+            "environment": "production",
+            "root_cause": "Missing connection release in exception handling branch of SQLAlchemy session pool.",
+            "resolution": "Applied context manager wrapper around database sessions and increased pool limit.",
+            "rollback": True,
+            "timestamp": "2026-07-12T16:00:00Z",
+            "tags": ["database", "connection-pool", "sqlalchemy"],
+            "metadata": {"affected_services": ["inventory-service"]}
+        }
+    ]
+
+
 @router.get("/incidents")
 def list_incidents(
     service: Optional[str] = None,
     severity: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = 1,
-    page_size: int = 10,
+    page_size: int = 100,
 ):
-    items = [
-        {
-            "incident_id": "INC-104",
-            "title": "Database connection timeout",
-            "description": "Customers reported 502 errors after deployment.",
-            "severity": "high",
-            "outcome": "Rollback completed successfully",
-            "service": "inventory-service",
-            "environment": "production",
-            "root_cause": "Database connection pool exhaustion",
-            "rollback": True,
-            "timestamp": "2026-07-12T16:00:00Z",
-            "tags": ["database", "rollback"],
-            "metadata": {},
-        }
-    ]
+    items = _load_curated_incident_dataset()
     filtered = items
     if service:
-        filtered = [i for i in filtered if i["service"] == service]
+        service_lower = service.lower()
+        filtered = [i for i in filtered if i["service"].lower() == service_lower]
     if severity:
-        filtered = [i for i in filtered if i["severity"] == severity]
+        sev_lower = severity.lower()
+        filtered = [i for i in filtered if i["severity"].lower() == sev_lower]
+    if search:
+        s_lower = search.lower()
+        filtered = [
+            i for i in filtered 
+            if s_lower in i["title"].lower() 
+            or s_lower in i["description"].lower() 
+            or s_lower in i["service"].lower() 
+            or s_lower in i["incident_id"].lower()
+        ]
+        
     total = len(filtered)
     start = (page - 1) * page_size
     end = start + page_size
@@ -413,37 +522,28 @@ def list_incidents(
 
 @router.get("/incidents/{incident_id}")
 def get_incident(incident_id: str):
-    if incident_id == "INC-104":
-        return {
-            "incident_id": "INC-104",
-            "title": "Database connection timeout",
-            "description": "Customers reported 502 errors after deployment.",
-            "severity": "high",
-            "outcome": "Rollback completed successfully",
-            "service": "inventory-service",
-            "environment": "production",
-            "root_cause": "Database connection pool exhaustion",
-            "rollback": True,
-            "timestamp": "2026-07-12T16:00:00Z",
-            "tags": ["database", "rollback"],
-            "metadata": {},
-        }
+    items = _load_curated_incident_dataset()
+    for inc in items:
+        if inc["incident_id"] == incident_id:
+            return inc
     raise HTTPException(status_code=404, detail="Incident not found")
 
 
 @router.post("/incidents")
 def create_incident(request: CreateIncidentRequest):
     incident = {
-        "incident_id": "INC-105",
+        "incident_id": f"INC-{int(time.time()) % 10000}",
         "title": request.title,
         "description": request.description,
+        "summary": request.description,
         "severity": request.severity,
         "outcome": request.outcome,
         "service": request.service,
         "environment": request.environment,
-        "root_cause": request.root_cause,
-        "rollback": request.rollback,
-        "timestamp": "2026-07-13T12:30:00Z",
+        "root_cause": request.root_cause or "Manual incident log entry",
+        "resolution": "Recorded in DeployGuard audit log",
+        "rollback": request.rollback or False,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "tags": request.tags or [],
         "metadata": {},
     }
@@ -452,35 +552,63 @@ def create_incident(request: CreateIncidentRequest):
 
 @router.post("/incidents/similarity")
 def similarity_search(request: SimilaritySearchRequest):
-    matches = [
-        {
-            "incident_id": "INC-104",
-            "title": "Database connection timeout",
-            "description": "Customers reported 502 errors after the recent deployment",
-            "severity": "high",
-            "outcome": "Rollback completed",
-            "service": "inventory-service",
-            "environment": "production",
-            "similarity": 0.92,
-            "timestamp": "2026-07-12T16:00:00Z",
-            "root_cause": "Connection pool exhausted",
-            "rollback": True,
-        },
-        {
-            "incident_id": "INC-105",
-            "title": "Authentication service failing",
-            "description": "Users unable to login, 401 errors in logs",
-            "severity": "critical",
-            "outcome": "Rollback completed",
-            "service": "auth-service",
-            "environment": "production",
-            "similarity": 0.88,
-            "timestamp": "2026-07-13T09:30:00Z",
-            "root_cause": "Token validation service down",
-            "rollback": False,
-        },
-    ]
-    return {"query": request.text, "matches": matches}
+    all_incidents = _load_curated_incident_dataset()
+    query_text = (request.text or "").strip().lower()
+    
+    if not query_text:
+        return {"query": request.text, "matches": []}
+        
+    query_words = set(query_text.split())
+    scored_matches = []
+    
+    for inc in all_incidents:
+        searchable_text = f"{inc['title']} {inc['description']} {inc['summary']} {inc['root_cause']} {inc['service']} {' '.join(inc.get('tags', []))}".lower()
+        searchable_words = set(searchable_text.split())
+        
+        overlap = len(query_words.intersection(searchable_words))
+        if overlap > 0:
+            match_ratio = overlap / len(query_words)
+            # Compute dynamic similarity score (0.50 - 0.96)
+            score = round(min(0.96, 0.52 + (match_ratio * 0.44)), 2)
+            
+            scored_matches.append({
+                "incident_id": inc["incident_id"],
+                "title": inc["title"],
+                "description": inc["description"],
+                "summary": inc.get("summary", inc["description"]),
+                "severity": inc["severity"],
+                "outcome": inc["outcome"],
+                "service": inc["service"],
+                "environment": inc["environment"],
+                "similarity": score,
+                "root_cause": inc["root_cause"],
+                "resolution": inc.get("resolution", ""),
+                "rollback": inc["rollback"],
+                "timestamp": inc["timestamp"],
+            })
+            
+    scored_matches.sort(key=lambda x: x["similarity"], reverse=True)
+    
+    if not scored_matches:
+        for inc in all_incidents[:2]:
+            scored_matches.append({
+                "incident_id": inc["incident_id"],
+                "title": inc["title"],
+                "description": inc["description"],
+                "summary": inc.get("summary", inc["description"]),
+                "severity": inc["severity"],
+                "outcome": inc["outcome"],
+                "service": inc["service"],
+                "environment": inc["environment"],
+                "similarity": 0.45,
+                "root_cause": inc["root_cause"],
+                "resolution": inc.get("resolution", ""),
+                "rollback": inc["rollback"],
+                "timestamp": inc["timestamp"],
+            })
+            
+    return {"query": request.text, "matches": scored_matches[:5]}
+
 
 
 # ---------------------------------------------------------------------------

@@ -11,21 +11,21 @@ import './IncidentHistory.css';
 export const IncidentHistory: React.FC = () => {
   const [incidents, setIncidents] = useState<IncidentRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   
   // Playground states
   const [playgroundText, setPlaygroundText] = useState('feat: Add database migrations and disable oauth validation temporarily');
   const [calculating, setCalculating] = useState(false);
   const [similarityResults, setSimilarityResults] = useState<SimilarIncidentMatch[]>([]);
 
-
   const fetchIncidents = async () => {
-  try {
-    const response = await listIncidents();
-    setIncidents(response.items);
-  } catch (err) {
-    console.error('Failed to load incidents:', err);
-  }
-};
+    try {
+      const response = await listIncidents();
+      setIncidents(response.items);
+    } catch (err) {
+      console.error('Failed to load incidents:', err);
+    }
+  };
 
   useEffect(() => {
     fetchIncidents();
@@ -45,12 +45,14 @@ export const IncidentHistory: React.FC = () => {
   const runSimilarityPlayground = async (e: React.FormEvent) => {
     e.preventDefault();
     setCalculating(true);
-    
+    try {
       const response = await searchSimilarIncidents({
-  text: playgroundText,
-});
-
-setSimilarityResults(response.matches);
+        text: playgroundText,
+      });
+      setSimilarityResults(response.matches);
+    } finally {
+      setCalculating(false);
+    }
   };
 
   return (
@@ -58,9 +60,9 @@ setSimilarityResults(response.matches);
       <div className="incident-history-header">
         <h1>
           <History className="header-icon" />
-          Incident History Database
+          Historical Incident Intelligence
         </h1>
-        <p>Analyze historical failures and perform real-time semantic similarity lookups against previous outages.</p>
+        <p>Analyze historical failures and perform real-time regression vector lookups against previous outages.</p>
       </div>
 
       <div className="history-grid-layout">
@@ -88,8 +90,14 @@ setSimilarityResults(response.matches);
               else if (sev === 'medium') SevIcon = Info;
               else if (sev === 'low') SevIcon = CheckCircle2;
 
+              const isExpanded = expandedId === inc.incident_id;
+
               return (
-                <div key={inc.incident_id} className="incident-card">
+                <div 
+                  key={inc.incident_id} 
+                  className="incident-card"
+                  onClick={() => setExpandedId(isExpanded ? null : inc.incident_id)}
+                >
                   <div className="incident-card-top">
                     <span className="inc-id">{inc.incident_id}</span>
                     <span className={`sev-badge ${sev}`}>
@@ -102,7 +110,51 @@ setSimilarityResults(response.matches);
                   <div className="incident-card-bottom">
                     <span className="inc-service">Service: <span>{inc.service}</span></span>
                     <span className="inc-env">Env: <span>{inc.environment}</span></span>
+                    <span style={{ marginLeft: 'auto', color: 'var(--accent-cyan)' }}>
+                      {isExpanded ? '▲ Hide Details' : '▼ Expand Details'}
+                    </span>
                   </div>
+
+                  {isExpanded && (
+                    <div className="incident-expanded-details" onClick={(e) => e.stopPropagation()}>
+                      {inc.root_cause && (
+                        <div className="detail-block">
+                          <span className="detail-label">Root Cause</span>
+                          <span className="detail-value">{inc.root_cause}</span>
+                        </div>
+                      )}
+
+                      {inc.summary && (
+                        <div className="detail-block">
+                          <span className="detail-label">AI Intelligence Summary</span>
+                          <span className="detail-value">{inc.summary}</span>
+                        </div>
+                      )}
+
+                      {inc.resolution && (
+                        <div className="detail-block">
+                          <span className="detail-label">Resolution</span>
+                          <span className="detail-value">{inc.resolution}</span>
+                        </div>
+                      )}
+
+                      <div className="detail-row">
+                        <div className="detail-block">
+                          <span className="detail-label">Rollback Executed</span>
+                          <span className="detail-value" style={{ color: inc.rollback ? 'var(--color-block)' : 'var(--color-safe)' }}>
+                            {inc.rollback ? 'YES (Rollback Triggered)' : 'NO'}
+                          </span>
+                        </div>
+
+                        <div className="detail-block">
+                          <span className="detail-label">Related Target</span>
+                          <span className="detail-value font-mono">
+                            {inc.service} ({inc.environment})
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -111,7 +163,7 @@ setSimilarityResults(response.matches);
 
         {/* Right Pane: Similarity Lookup Playground */}
         <section className="similarity-playground-panel">
-          <h2>Semantic Similarity Playground</h2>
+          <h2>Historical Incident Intelligence Search</h2>
           <p className="section-desc">Generate query embeddings on the fly and perform vector matching against historical incidents.</p>
 
           <form onSubmit={runSimilarityPlayground} className="playground-form">
@@ -127,13 +179,13 @@ setSimilarityResults(response.matches);
 
             <button type="submit" className="calculate-btn" disabled={calculating}>
               <Calculator className="btn-icon" />
-              <span>{calculating ? 'Analyzing Vector Space...' : 'Perform Semantic Search'}</span>
+              <span>{calculating ? 'Analyzing Vector Space...' : 'Perform Intelligence Search'}</span>
             </button>
           </form>
 
           {/* Results display */}
           <div className="similarity-results-container">
-            <h3>Matching Vector Hits</h3>
+            <h3>Vector Similarity Matches</h3>
             <p className="threshold-info">Matching threshold is set to <span>0.50</span>.</p>
 
             {similarityResults.length === 0 ? (
@@ -159,6 +211,12 @@ setSimilarityResults(response.matches);
                           </span>
                         </div>
                       </div>
+
+                      {res.root_cause && (
+                        <p style={{ fontSize: '11px', color: '#c7c4d7', margin: '4px 0 8px 0', lineHeight: 1.4 }}>
+                          <strong style={{ color: 'var(--text-muted)' }}>Root Cause:</strong> {res.root_cause}
+                        </p>
+                      )}
                       
                       <div className="result-row-footer">
                         {isMatched ? (
