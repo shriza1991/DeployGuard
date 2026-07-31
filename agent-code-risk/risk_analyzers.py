@@ -300,12 +300,72 @@ class LargeChangeAnalyzer(BaseAnalyzer):
 class DeletedValidationAnalyzer(BaseAnalyzer):
     name = "deleted-validation"
 
+    _EVIDENCE_PATTERNS = [
+        # 1. Deleted middleware registration / usage
+        re.compile(r'(?i)\.use\s*\(\s*\w*(?:auth|session|guard|permission|jwt)'),
+        re.compile(r'(?i)add_middleware\s*\(\s*\w*(?:auth|session|guard|permission|jwt)'),
+        re.compile(r'(?i)middleware\s*=\s*\[.*?(?:auth|session|guard|permission|jwt)'),
+        
+        # 2. Deleted authentication / guard decorators
+        re.compile(r'@\w*(?:auth|login|jwt|guard|permission|session)\w*'),
+        
+        # 3. Deleted dependency injection for auth
+        re.compile(r'(?i)\bDepends\s*\(\s*\w*(?:auth|user|login|role|permission|guard|verify)'),
+        
+        # 4. Deleted calls to validate_*, require_*, verify_*
+        re.compile(r'(?i)\b(?:validate|require|verify)_[a-zA-Z0-9_]*\s*\('),
+        
+        # 5. Deleted permission/auth guard functions or classes
+        re.compile(r'(?i)\bdef\s+\w*(?:auth|guard|permission|session)\w*\s*\('),
+        re.compile(r'(?i)\bfunction\s+\w*(?:auth|guard|permission|session)\w*\s*\('),
+        re.compile(r'(?i)\b(?:const|let|var)\s+\w*(?:auth|guard|permission|session)\w*\s*='),
+        re.compile(r'(?i)\bclass\s+\w*(?:auth|guard|permission|session)\w*'),
+    ]
+
+    def _is_test_file(self, file_name: str) -> bool:
+        norm = file_name.replace("\\", "/").lower()
+        parts = norm.split("/")
+        if "tests" in parts or "test" in parts:
+            return True
+        if parts:
+            basename = parts[-1]
+            if basename.startswith("test_") or basename.endswith("_test.py"):
+                return True
+        return False
+
+    def _clean_line(self, line: str) -> str:
+        # Remove inline multi-line block comments (e.g. /* ... */)
+        line = re.sub(r'/\*.*?\*/', '', line)
+        # Remove HTML comments (e.g. <!-- ... -->)
+        line = re.sub(r'<!--.*?-->', '', line)
+        # Remove URLs
+        line = re.sub(r'https?://[^\s\'"]+', '', line)
+        # Remove string literals
+        line = re.sub(r'""".*?"""', '', line)
+        line = re.sub(r"'''.*?'''", '', line)
+        line = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', line)
+        line = re.sub(r"'[^'\\]*(?:\\.[^'\\]*)*'", '', line)
+        # Remove comments
+        if '#' in line:
+            line = line.split('#', 1)[0]
+        if '//' in line:
+            line = line.split('//', 1)[0]
+        return line.strip()
+
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
         for file_name, line in _iter_changed_lines(context):
+            if self._is_test_file(file_name):
+                continue
             if not line.startswith("-"):
                 continue
-            normalized = line.lower()
-            if any(term in normalized for term in VALIDATION_TERMS) or "auth" in normalized or "session" in normalized or "guard" in normalized:
+            # Drop the leading '-'
+            stripped_deleted = line[1:]
+            cleaned = self._clean_line(stripped_deleted)
+            if not cleaned:
+                continue
+            
+            # Check if any evidence patterns match the cleaned line
+            if any(pattern.search(cleaned) for pattern in self._EVIDENCE_PATTERNS):
                 return AnalyzerFinding(
                     score_delta=18,
                     reason="Input validation, assertion, or guard check was deleted in patch.",
@@ -319,6 +379,7 @@ class DeletedValidationAnalyzer(BaseAnalyzer):
                     metadata={"file": file_name, "line": line.strip()},
                 )
         return None
+
 
 
 class SecretCredentialAnalyzer(BaseAnalyzer):
