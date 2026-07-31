@@ -165,23 +165,61 @@ class BaseAnalyzer(ABC):
 class SecuritySensitiveAnalyzer(BaseAnalyzer):
     name = "security-sensitive"
 
+    _SECURITY_SENSITIVE_PATTERNS = [
+        # 1. JWT, Token, Session, Password verification/validation/hashing
+        re.compile(r'(?i)\bjwt\s*\.\s*(?:decode|verify)\b'),
+        re.compile(r'(?i)\b(?:validate|verify|check|hash)_[a-zA-Z0-9_]*(?:token|jwt|session|password|pwd|passcode|hash)\b'),
+        re.compile(r'(?i)\b(?:token|session|password|pwd|hash)\s*\.\s*(?:validate|verify|check|hash)\b'),
+        
+        # 2. Authentication middleware & decorators & dependency injection
+        re.compile(r'(?i)\b\w*(?:auth|session|guard|permission|jwt|login|credential)[a-zA-Z0-9_]*middleware\b'),
+        re.compile(r'(?i)\.use\s*\(\s*\w*(?:auth|session|guard|permission|jwt)'),
+        re.compile(r'(?i)add_middleware\s*\(\s*\w*(?:auth|session|guard|permission|jwt)'),
+        re.compile(r'@\w*(?:auth|login|jwt|guard|permission|session)\w*'),
+        re.compile(r'(?i)\bDepends\s*\(\s*\w*(?:auth|user|login|role|permission|guard|verify)'),
+        
+        # 3. Authorization logic, permission enforcement, role checks
+        re.compile(r'(?i)\b(?:has|check|require|validate|verify|enforce)_[a-zA-Z0-9_]*(?:perm|permission|role|auth|authorization)\b'),
+        re.compile(r'(?i)\b\w*(?:user|subject|member|account|client)\s*\.\s*(?:has|check|is)_(?:perm|permission|auth|authorized|authenticated|role)\b'),
+        re.compile(r'(?i)\b(?:authorize|is_authorized|check_auth|is_authenticated)\b'),
+        
+        # 4. Encryption, cryptography, hashing (md5, sha, bcrypt, etc.)
+        re.compile(r'(?i)\b(?:encrypt|decrypt|cipher|hashing|hashlib|bcrypt|argon2|fernet|pycrypto|cryptography)\b'),
+        re.compile(r'(?i)\b(?:aes|rsa|des|blowfish|chacha20)\b'),
+        
+        # 5. Credential handling & secret management
+        re.compile(r'(?i)\b(?:secret|credential)s?\s*_\s*(?:manager|store|vault|client|key)\b'),
+        re.compile(r'(?i)\bget\s*_\s*(?:secret|credential)\b'),
+        
+        # 6. Security configuration, policy, privilege checks, and ACL/RBAC
+        re.compile(r'(?i)\bsecurity\s*_\s*(?:config|policy|setup|context)\b'),
+        re.compile(r'(?i)\b(?:has|check|require|verify|elevate)_[a-zA-Z0-9_]*(?:privilege|privs?)\b'),
+        re.compile(r'(?i)\b\w*(?:acl|rbac)\w*\s*\.\s*\w+'),
+    ]
+
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
         for file_name, line in _iter_changed_lines(context):
-            normalized = line.lower()
-            if not any(term in normalized for term in SECURITY_TERMS):
+            # Ignore test files as they do not represent new risk in the production application.
+            if _is_test_file(file_name):
                 continue
-            return AnalyzerFinding(
-                score_delta=12,
-                reason="Security-sensitive terms were introduced or modified in code diff.",
-                recommendation="Review the affected code paths for access control, encryption, and privilege handling.",
-                rule_id="CODE_SECURITY_SENSITIVE",
-                category="authentication",
-                subcategory="access_control",
-                policy_action="REVIEW_REQUIRED",
-                severity="MEDIUM",
-                confidence=0.85,
-                metadata={"file": file_name, "line": line.strip()},
-            )
+            # Drop the leading '+' or '-' from the diff line
+            stripped = line[1:]
+            cleaned = _clean_line(stripped, ignore_assertions=True)
+            if not cleaned:
+                continue
+            if any(pattern.search(cleaned) for pattern in self._SECURITY_SENSITIVE_PATTERNS):
+                return AnalyzerFinding(
+                    score_delta=12,
+                    reason="Security-sensitive terms were introduced or modified in code diff.",
+                    recommendation="Review the affected code paths for access control, encryption, and privilege handling.",
+                    rule_id="CODE_SECURITY_SENSITIVE",
+                    category="authentication",
+                    subcategory="access_control",
+                    policy_action="REVIEW_REQUIRED",
+                    severity="MEDIUM",
+                    confidence=0.85,
+                    metadata={"file": file_name, "line": line.strip()},
+                )
         return None
 
 

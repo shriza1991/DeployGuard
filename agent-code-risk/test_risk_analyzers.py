@@ -109,5 +109,43 @@ class CodeRiskAnalyzerTests(unittest.TestCase):
         self.assertTrue(any(f.get("rule_id") == "CODE_AUTH_MODIFIED" for f in analysis.get("deterministic_findings", [])))
 
 
+    def test_security_sensitive_analyzer_filters(self):
+        # 1. Test file and HTTP request URL inside test: should be ignored and not trigger CODE_SECURITY_SENSITIVE
+        payload_test_file = {
+            "files": [
+                {
+                    "filename": "backend/tests/test_validation.py",
+                    "patch": "@@ -1 +1 @@\n+client.post(\"/api/v1/auth/login\", headers=headers)\n",
+                }
+            ]
+        }
+        analysis = analyze_code_risk(payload_test_file)
+        self.assertNotIn("CODE_SECURITY_SENSITIVE", [f.get("rule_id") for f in analysis.get("deterministic_findings", [])])
+
+        # 2. Keywords inside HTTP URLs, string literals, comments, or assertions: should be ignored
+        payload_false_positives = {
+            "files": [
+                {
+                    "filename": "app/utils.py",
+                    "patch": "@@ -1,5 +1 @@\n-# check encryption key and security\n-url = 'https://example.com/api/v1/auth/login'\n-msg = 'jwt.decode authentication failed'\n-assert token == 'secret'\n-expect(security).toBeDefined()\n",
+                }
+            ]
+        }
+        analysis = analyze_code_risk(payload_false_positives)
+        self.assertNotIn("CODE_SECURITY_SENSITIVE", [f.get("rule_id") for f in analysis.get("deterministic_findings", [])])
+
+        # 3. Strong evidence: should trigger CODE_SECURITY_SENSITIVE
+        payload_true_positive = {
+            "files": [
+                {
+                    "filename": "app/crypto.py",
+                    "patch": "@@ -1 +1 @@\n+cipher = AES.new(key)\n",
+                }
+            ]
+        }
+        analysis = analyze_code_risk(payload_true_positive)
+        self.assertTrue(any(f.get("rule_id") == "CODE_SECURITY_SENSITIVE" for f in analysis.get("deterministic_findings", [])))
+
+
 if __name__ == "__main__":
     unittest.main()
