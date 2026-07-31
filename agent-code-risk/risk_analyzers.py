@@ -185,28 +185,106 @@ class SecuritySensitiveAnalyzer(BaseAnalyzer):
         return None
 
 
+def _is_test_file(file_name: str) -> bool:
+    # Test files are ignored because changes to test suites do not represent new risk in the production application.
+    norm = file_name.replace("\\", "/").lower()
+    parts = norm.split("/")
+    if "tests" in parts or "test" in parts:
+        return True
+    if parts:
+        basename = parts[-1]
+        if basename.startswith("test_") or basename.endswith("_test.py"):
+            return True
+    return False
+
+
+def _clean_line(line: str, ignore_assertions: bool = False) -> str:
+    # Remove inline multi-line block comments (e.g. /* ... */)
+    line = re.sub(r'/\*.*?\*/', '', line)
+    # Remove HTML comments (e.g. <!-- ... -->)
+    line = re.sub(r'<!--.*?-->', '', line)
+    # Remove URLs
+    line = re.sub(r'https?://[^\s\'"]+', '', line)
+    # Remove string literals
+    line = re.sub(r'""".*?"""', '', line)
+    line = re.sub(r"'''.*?'''", '', line)
+    line = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', line)
+    line = re.sub(r"'[^'\\]*(?:\\.[^'\\]*)*'", '', line)
+    # Remove comments
+    if '#' in line:
+        line = line.split('#', 1)[0]
+    if '//' in line:
+        line = line.split('//', 1)[0]
+
+    if ignore_assertions:
+        normalized = line.lower()
+        if 'assert' in normalized or 'expect(' in normalized or 'expect (' in normalized:
+            return ""
+
+    return line.strip()
+
+
 class AuthenticationAnalyzer(BaseAnalyzer):
     name = "authentication"
 
+    _AUTH_IMPLEMENTATION_PATTERNS = [
+        # 1. Authentication middleware
+        re.compile(r'(?i)\b\w*(?:auth|session|guard|permission|jwt|login|credential)[a-zA-Z0-9_]*middleware\b'),
+        re.compile(r'(?i)\.use\s*\(\s*\w*(?:auth|session|guard|permission|jwt)'),
+        re.compile(r'(?i)add_middleware\s*\(\s*\w*(?:auth|session|guard|permission|jwt)'),
+        
+        # 2. JWT verification
+        re.compile(r'(?i)\bjwt\s*\.\s*(?:decode|verify)\b'),
+        re.compile(r'(?i)\bverify_[a-zA-Z0-9_]*(?:jwt|token)\b'),
+        
+        # 3. Permission checks
+        re.compile(r'(?i)\b(?:has|check|require|validate|verify)_[a-zA-Z0-9_]*(?:perm|permission)\b'),
+        re.compile(r'(?i)\b\w*(?:user|subject|member|account)\s*\.\s*has_(?:perm|permission)\b'),
+        
+        # 4. Role validation
+        re.compile(r'(?i)\b(?:has|check|require|validate|verify)_[a-zA-Z0-9_]*role\b'),
+        
+        # 5. Session validation
+        re.compile(r'(?i)\b(?:validate|verify|check)_[a-zA-Z0-9_]*session\b'),
+        re.compile(r'(?i)\bsession\s*\.\s*(?:validate|verify|check)\b'),
+        
+        # 6. Authentication decorators
+        re.compile(r'@\w*(?:auth|login|jwt|guard|permission|session)\w*'),
+        
+        # 7. Credential verification
+        re.compile(r'(?i)\b(?:verify|check|validate)_[a-zA-Z0-9_]*(?:credentials|password|pwd|passcode)\b'),
+        re.compile(r'(?i)\bauthenticate\s*\('),
+        
+        # 8. Authorization logic
+        re.compile(r'(?i)\b(?:authorize|is_authorized|check_auth|is_authenticated)\b'),
+    ]
+
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
         for file_name, line in _iter_changed_lines(context):
-            normalized = line.lower()
-            if not any(term in normalized for term in AUTH_TERMS):
+            # Ignore test files as they do not represent new risk in the production application.
+            if _is_test_file(file_name):
                 continue
             if file_name.endswith((".py", ".js", ".ts", ".go", ".java", ".rb")):
-                return AnalyzerFinding(
-                    score_delta=15,
-                    reason="Code diff touches authentication-related logic (sessions, credentials, roles).",
-                    recommendation="Validate authentication flows, role changes, and session handling with focused tests.",
-                    rule_id="CODE_AUTH_MODIFIED",
-                    category="authentication",
-                    subcategory="auth_logic",
-                    policy_action="REVIEW_REQUIRED",
-                    severity="HIGH",
-                    confidence=0.90,
-                    metadata={"file": file_name, "line": line.strip()},
-                )
+                # Drop the leading '+' or '-' from the diff line
+                stripped = line[1:]
+                cleaned = _clean_line(stripped, ignore_assertions=True)
+                if not cleaned:
+                    continue
+                if any(pattern.search(cleaned) for pattern in self._AUTH_IMPLEMENTATION_PATTERNS):
+                    return AnalyzerFinding(
+                        score_delta=15,
+                        reason="Code diff touches authentication-related logic (sessions, credentials, roles).",
+                        recommendation="Validate authentication flows, role changes, and session handling with focused tests.",
+                        rule_id="CODE_AUTH_MODIFIED",
+                        category="authentication",
+                        subcategory="auth_logic",
+                        policy_action="REVIEW_REQUIRED",
+                        severity="HIGH",
+                        confidence=0.90,
+                        metadata={"file": file_name, "line": line.strip()},
+                    )
         return None
+
 
 
 class DatabaseMigrationAnalyzer(BaseAnalyzer):
@@ -322,45 +400,16 @@ class DeletedValidationAnalyzer(BaseAnalyzer):
         re.compile(r'(?i)\bclass\s+\w*(?:auth|guard|permission|session)\w*'),
     ]
 
-    def _is_test_file(self, file_name: str) -> bool:
-        norm = file_name.replace("\\", "/").lower()
-        parts = norm.split("/")
-        if "tests" in parts or "test" in parts:
-            return True
-        if parts:
-            basename = parts[-1]
-            if basename.startswith("test_") or basename.endswith("_test.py"):
-                return True
-        return False
-
-    def _clean_line(self, line: str) -> str:
-        # Remove inline multi-line block comments (e.g. /* ... */)
-        line = re.sub(r'/\*.*?\*/', '', line)
-        # Remove HTML comments (e.g. <!-- ... -->)
-        line = re.sub(r'<!--.*?-->', '', line)
-        # Remove URLs
-        line = re.sub(r'https?://[^\s\'"]+', '', line)
-        # Remove string literals
-        line = re.sub(r'""".*?"""', '', line)
-        line = re.sub(r"'''.*?'''", '', line)
-        line = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', line)
-        line = re.sub(r"'[^'\\]*(?:\\.[^'\\]*)*'", '', line)
-        # Remove comments
-        if '#' in line:
-            line = line.split('#', 1)[0]
-        if '//' in line:
-            line = line.split('//', 1)[0]
-        return line.strip()
-
     def analyze(self, context: dict[str, Any]) -> AnalyzerFinding | None:
         for file_name, line in _iter_changed_lines(context):
-            if self._is_test_file(file_name):
+            # Ignore test files as they do not represent new risk in the production application.
+            if _is_test_file(file_name):
                 continue
             if not line.startswith("-"):
                 continue
             # Drop the leading '-'
             stripped_deleted = line[1:]
-            cleaned = self._clean_line(stripped_deleted)
+            cleaned = _clean_line(stripped_deleted)
             if not cleaned:
                 continue
             

@@ -71,5 +71,43 @@ class CodeRiskAnalyzerTests(unittest.TestCase):
         self.assertTrue(any(f.get("rule_id") == "REMOVED_AUTH_MIDDLEWARE" for f in analysis.get("deterministic_findings", [])))
 
 
+    def test_authentication_analyzer_filters(self):
+        # 1. Test file: should be ignored and not trigger CODE_AUTH_MODIFIED
+        payload_test_file = {
+            "files": [
+                {
+                    "filename": "tests/test_login.py",
+                    "patch": "@@ -1 +1 @@\n+jwt.decode(token)\n",
+                }
+            ]
+        }
+        analysis = analyze_code_risk(payload_test_file)
+        self.assertNotIn("CODE_AUTH_MODIFIED", [f.get("rule_id") for f in analysis.get("deterministic_findings", [])])
+
+        # 2. Keywords inside HTTP URLs, assertions, comments, or string literals: should be ignored
+        payload_false_positives = {
+            "files": [
+                {
+                    "filename": "app/auth.py",
+                    "patch": "@@ -1,5 +1 @@\n-# check user session role token\n-url = 'https://example.com/auth/login'\n-request_path = '/login'\n-assert token == 'secret'\n-expect(auth).toBeDefined()\n",
+                }
+            ]
+        }
+        analysis = analyze_code_risk(payload_false_positives)
+        self.assertNotIn("CODE_AUTH_MODIFIED", [f.get("rule_id") for f in analysis.get("deterministic_findings", [])])
+
+        # 3. Strong evidence: should trigger CODE_AUTH_MODIFIED
+        payload_true_positive = {
+            "files": [
+                {
+                    "filename": "app/auth.py",
+                    "patch": "@@ -1 +1 @@\n+jwt.decode(token)\n",
+                }
+            ]
+        }
+        analysis = analyze_code_risk(payload_true_positive)
+        self.assertTrue(any(f.get("rule_id") == "CODE_AUTH_MODIFIED" for f in analysis.get("deterministic_findings", [])))
+
+
 if __name__ == "__main__":
     unittest.main()
