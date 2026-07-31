@@ -58,6 +58,10 @@ class IncidentHistoryService:
         if not deployment_document:
             deployment_document = "empty deployment event"
 
+        print("=== Deployment Document ===")
+        print(deployment_document)
+        print("===========================")
+
         incidents: list[SimilarIncident] = []
         retrieval_metadata: dict[str, Any] = {"latency_ms": 0, "raw_hits": 0}
         qdrant_available = False

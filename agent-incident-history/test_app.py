@@ -67,6 +67,29 @@ def test_build_deployment_document_combines_searchable_fields():
     assert document == document.lower()
 
 
+def test_build_deployment_document_includes_infrastructure_and_enrichment_context():
+    document = build_deployment_document(
+        {
+            "pull_request": {"title": "Harden deployment", "body": "Container runtime changes"},
+            "head_commit": {"message": "Enable privileged workload"},
+            "changed_files": [
+                {"filename": "Dockerfile", "patch": "+ USER root"},
+                {"filename": "docker-compose.yml", "patch": "+ /var/run/docker.sock"},
+                {"filename": "deployment.yaml", "patch": "+ securityContext:\n+   privileged: true"},
+            ],
+            "deterministic_findings": [{"rule_id": "K8S_PRIVILEGED", "severity": "high"}],
+            "repository_context": [{"file": "values.yaml", "content": "production cluster policy"}],
+        }
+    )
+
+    for expected in (
+        "dockerfile", "user root", "docker-compose.yml", "/var/run/docker.sock",
+        "deployment.yaml", "securitycontext", "privileged: true", "k8s_privileged",
+        "production cluster policy", "detected infrastructure keywords",
+    ):
+        assert expected in document
+
+
 def test_service_scores_critical_rollback_history():
     service = build_service(
         hits=[
@@ -117,4 +140,3 @@ def test_service_handles_embedding_failure():
     assert result["confidence"] == 0.1
     assert result["metadata"]["embedding_quality"] == "failed"
     assert result["similar_incidents"] == []
-

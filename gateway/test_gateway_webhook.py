@@ -67,6 +67,34 @@ def test_pr_opened_event_triggers_analysis(mock_external_dependencies):
     assert producer.flush.call_count == 1
 
 
+@patch("routers.webhook.requests.get")
+def test_gateway_enriches_shared_event_with_pr_file_patches(mock_get, mock_external_dependencies):
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"filename": "Dockerfile", "patch": "+ USER root"},
+        {"filename": "deployment.yaml", "patch": "+ securityContext:\n+  privileged: true"},
+    ]
+    mock_get.return_value = mock_response
+    payload = {
+        "action": "opened",
+        "number": 42,
+        "repository": {"full_name": "acme/platform"},
+        "pull_request": {"title": "Update deployment", "body": "Runtime hardening"},
+        "head_commit": {"message": "Use root container"},
+    }
+
+    response = client.post("/webhook/github", json=payload, headers={"X-GitHub-Event": "pull_request"})
+
+    assert response.status_code == 200
+    mock_get.assert_called_once()
+    event = mock_external_dependencies["producer"].send.call_args.args[1]
+    published_payload = event["payload"]
+    assert published_payload["commit_message"] == "Use root container"
+    assert published_payload["changed_files"] == mock_response.json.return_value
+    assert published_payload["pull_request"]["title"] == "Update deployment"
+    assert published_payload["pull_request"]["body"] == "Runtime hardening"
+
+
 def test_pr_synchronize_event_triggers_new_analysis(mock_external_dependencies):
     """
     Subsequent commits to an existing PR (synchronize) should trigger a NEW analysis

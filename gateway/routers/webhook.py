@@ -5,8 +5,10 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import redis
+import requests
 from fastapi import APIRouter, Header
 
 from kafka import KafkaProducer
@@ -19,6 +21,7 @@ router = APIRouter(
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 TOPIC = "deployment-events"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 META_TTL_SECONDS = 7200  # 2 hours — longer than the 1-hour decision TTL
 
@@ -47,6 +50,80 @@ class GitHubWebhookPayload(BaseModel):
     head_commit: dict | None = None
     pull_request: dict | None = None
     changed_files: list[dict] | None = None
+    number: int | None = None
+    commit_message: str | None = None
+    files: list[dict] | None = None
+    deterministic_findings: list[dict] | None = None
+    repository_context: list[dict] | None = None
+    repository_evidence: list[dict] | None = None
+
+
+def _fetch_pull_request_files(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fetch PR file patches once before publishing the event to Kafka."""
+    existing_files = payload.get("changed_files")
+    if isinstance(existing_files, list) and any(
+        isinstance(item, dict) and item.get("patch") for item in existing_files
+    ):
+        return existing_files
+
+    repository = payload.get("repository") or {}
+    pull_request = payload.get("pull_request") or {}
+    full_name = str(repository.get("full_name") or "")
+    owner, _, repo = full_name.partition("/")
+    if not repo:
+        repo = str(repository.get("name") or "")
+        repo_owner = repository.get("owner") or {}
+        owner = str(repo_owner.get("login") or repo_owner.get("name") or "") if isinstance(repo_owner, dict) else ""
+
+    pr_number = pull_request.get("number") or payload.get("number")
+    if not owner or not repo or not pr_number:
+        return existing_files if isinstance(existing_files, list) else []
+
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "DeployGuard-Gateway/1.0"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+
+    files: list[dict[str, Any]] = []
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
+    page = 1
+    try:
+        while True:
+            response = requests.get(url, headers=headers, params={"per_page": 100, "page": page}, timeout=10)
+            response.raise_for_status()
+            batch = response.json()
+            if not isinstance(batch, list):
+                break
+            files.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < 100:
+                break
+            page += 1
+    except requests.RequestException as exc:
+        logging.warning("Unable to enrich PR #%s with changed-file patches: %s", pr_number, exc)
+        return existing_files if isinstance(existing_files, list) else []
+    return files
+
+
+def _enrich_deployment_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Populate the shared deployment-event contract for every agent."""
+    head_commit = payload.get("head_commit") or {}
+    if not payload.get("commit_message") and isinstance(head_commit, dict):
+        payload["commit_message"] = head_commit.get("message") or ""
+
+    files = _fetch_pull_request_files(payload)
+    if files:
+        payload["changed_files"] = files
+
+    pull_request = payload.get("pull_request") or {}
+    changed_files = payload.get("changed_files") or []
+    logging.info(
+        "Deployment payload enriched: pr_title=%s pr_body=%s commit_message=%s changed_files=%d patches=%d",
+        bool(isinstance(pull_request, dict) and pull_request.get("title")),
+        bool(isinstance(pull_request, dict) and pull_request.get("body")),
+        bool(payload.get("commit_message")),
+        len(changed_files),
+        sum(1 for item in changed_files if isinstance(item, dict) and item.get("patch")),
+    )
+    return payload
 
 
 @router.post("/github")
@@ -91,10 +168,11 @@ async def github_webhook(
     webhook_received_at = datetime.now(timezone.utc).isoformat()
     correlation_id = str(uuid.uuid4())
 
+    deployment_payload = _enrich_deployment_payload(payload.model_dump())
     event = {
         "correlation_id": correlation_id,
         "webhook_received_at": webhook_received_at,
-        "payload": payload.model_dump(),
+        "payload": deployment_payload,
     }
 
     logging.info("Publishing deployment event:")
