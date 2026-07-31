@@ -117,23 +117,25 @@ def make_decision(correlation_id: str, agent_results: Dict[str, Dict[str, Any]])
         overall_score = min(95, round(raw_score))
 
     # 5. Policy Engine Decision
+    # The policy decision (SAFE / REVIEW / BLOCK) is determined independently from the overall_score.
+    # It evaluates specific rule IDs, block findings, and review findings to enforce guardrails,
+    # distinct from the mathematical risk aggregation score.
     if block_findings or "HARDCODED_AWS_CREDENTIALS" in rule_ids or "TERRAFORM_OPEN_SSH" in rule_ids or "TERRAFORM_PUBLIC_S3" in rule_ids or "K8S_PRIVILEGED_POD" in rule_ids:
         decision = "BLOCK"
         severity = "CRITICAL"
-    elif review_findings or overall_score >= 60 or "DOCKER_ROOT_USER" in rule_ids:
+    elif review_findings or "DOCKER_ROOT_USER" in rule_ids:
         decision = "REVIEW"
         severity = "HIGH" if review_findings else "MEDIUM"
     else:
         decision = "SAFE"
         severity = "LOW"
 
-    # Ensure score reflects decision bounds
+    # Ensure score reflects decision bounds.
+    # The overall_score represents the true weighted risk score calculated from raw risk signals
+    # and benchmark overrides. We preserve the critical BLOCK policy floor of 85, but avoid
+    # artificial REVIEW floors or SAFE ceilings to prevent misleading, clamped score values.
     if decision == "BLOCK":
         overall_score = max(overall_score, 85)
-    elif decision == "REVIEW":
-        overall_score = max(overall_score, 60)
-    elif decision == "SAFE":
-        overall_score = min(overall_score, 20)
 
     # 6. Multi-Factor Confidence Calculation
     conf_values = []
