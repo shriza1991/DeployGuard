@@ -94,7 +94,13 @@ DeployGuard introduces a real-time risk evaluation pipeline that intercepts GitH
 
 ## Screenshots
 
-> *Placeholder sections for UI documentation screens.*
+![alt text](image.png)
+
+![alt text](image-1.png)
+
+![alt text](image-2.png)
+
+![alt text](image-3.png)
 
 ### Operations Center Dashboard
 *(Dark-mode executive overview featuring summary cards, latest deployment decisions table, repository context, pipeline health, and live activity timeline)*
