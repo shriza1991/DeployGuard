@@ -102,28 +102,6 @@ DeployGuard introduces a real-time risk evaluation pipeline that intercepts GitH
 
 ![alt text](image-3.png)
 
-### Operations Center Dashboard
-*(Dark-mode executive overview featuring summary cards, latest deployment decisions table, repository context, pipeline health, and live activity timeline)*
-
-### Security Analytics
-*(Historical trends dashboard displaying deployment volume, risk score distributions, and blocked release details)*
-
-### Deployment Audits & Detail Inspection
-*(Paginated audit logs and single-deployment deep inspection view showing sub-agent findings and raw decision scorecards)*
-
-### AI Agents Fleet Monitor
-*(Real-time agent fleet monitoring showing latency, analysis counts, confidence indices, and worker console output)*
-
-### Historical Incident Intelligence
-*(Outage database browser and real-time regression vector similarity search engine)*
-
-### Semantic Code Search
-*(Vector-based natural language code lookup interface)*
-
-### Webhook Simulator
-*(Interactive GitHub push event generator with live stage progress tracking)*
-
----
 
 ## Architecture
 
