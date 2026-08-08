@@ -6,6 +6,10 @@ DeployGuard is an autonomous DevSecOps control plane designed to eliminate high-
 
 ---
 
+## Demo Video
+
+🎥 [Watch Demo Video](https://drive.google.com/file/d/1FBGH5HkoxfywmfYxAOkdbDrylNfs-sZO/view?usp=sharing)
+
 ## Table of Contents
 
 - [Problem Statement](#problem-statement)
@@ -102,7 +106,6 @@ DeployGuard introduces a real-time risk evaluation pipeline that intercepts GitH
 
 ![alt text](image-3.png)
 
-
 ## Architecture
 
 The following diagram illustrates the complete DeployGuard distributed system architecture:
@@ -121,7 +124,7 @@ flowchart TD
         KAFKA -->|Consume| CRA[Code Risk Agent]
         KAFKA -->|Consume| IRA[Infra Risk Agent]
         KAFKA -->|Consume| IHA[Incident History Agent]
-        
+
         CRA -->|LLM Prompt Audit| GEMINI[Google Gemini API]
         IRA -->|Heuristics & LLM Audit| GEMINI
         IHA -->|Vector Search| QDRANT[(Qdrant Vector DB :6333)]
@@ -134,7 +137,7 @@ flowchart TD
 
         KAFKA -->|Consume findings| AGG[Decision Aggregator :8002]
         AGG <--->|State & Metrics Cache| REDIS[(Redis Cache :6379)]
-        
+
         RCS[Repo Context Service :8003] <--->|Indexed Vector Chunks| QDRANT
         RCS <--->|Metadata Cache| REDIS
     end
@@ -160,7 +163,7 @@ flowchart TD
 
 1. **Webhook Ingress**: Developer pushes code or opens a Pull Request on GitHub. GitHub fires a webhook payload to API Gateway (`:8000`).
 2. **Event Streaming**: Gateway parses and validates payload headers, wraps the payload in a `DeploymentEvent`, and publishes it to Kafka's `deployment-events` topic.
-3. **Parallel Scanning**: 
+3. **Parallel Scanning**:
    - **Code Risk Agent** extracts modified file diffs and prompts Gemini 2.5 Flash to detect credential leaks and code defects.
    - **Infra Risk Agent** analyzes Kubernetes and IaC files for privilege escalation and security drifts.
 4. **Vector Lookup**: **Incident History Agent** embeds commit text using sentence-transformers and executes vector cosine similarity queries against Qdrant (`:6333`) to discover past outage parallels.
@@ -175,41 +178,41 @@ flowchart TD
 
 ### Frontend
 
-| Component | Technology | Description |
-|---|---|---|
-| Framework | **React 18** | UI component architecture |
-| Tooling | **Vite 8** | Lightning-fast build tool & dev server |
-| Language | **TypeScript 5.8** | Type-safe application development |
-| State & Query | **TanStack React Query v5** | Server-state caching and refetching |
-| Routing | **React Router v7** | Single-page application client routing |
-| Icons & Visuals | **Lucide React & Recharts** | Premium icon system & vector charts |
-| Styling | **Vanilla CSS3** | Custom HSL tokenized dark glassmorphism system |
+| Component       | Technology                  | Description                                    |
+| --------------- | --------------------------- | ---------------------------------------------- |
+| Framework       | **React 18**                | UI component architecture                      |
+| Tooling         | **Vite 8**                  | Lightning-fast build tool & dev server         |
+| Language        | **TypeScript 5.8**          | Type-safe application development              |
+| State & Query   | **TanStack React Query v5** | Server-state caching and refetching            |
+| Routing         | **React Router v7**         | Single-page application client routing         |
+| Icons & Visuals | **Lucide React & Recharts** | Premium icon system & vector charts            |
+| Styling         | **Vanilla CSS3**            | Custom HSL tokenized dark glassmorphism system |
 
 ### Backend & Microservices
 
-| Component | Technology | Description |
-|---|---|---|
-| Language | **Python 3.11** | Core backend language |
-| Framework | **FastAPI & Uvicorn** | High-performance asynchronous REST APIs |
-| Data Validation | **Pydantic v2** | Strict schema validation |
-| Event Bus | **Apache Kafka** | Distributed message streaming broker |
-| Caching & State | **Redis 7** | In-memory decision cache & metrics store |
-| Vector DB | **Qdrant** | High-performance vector database |
-| Embeddings | **Sentence-Transformers** | Local text embedding generation (`all-MiniLM-L6-v2`) |
+| Component       | Technology                | Description                                          |
+| --------------- | ------------------------- | ---------------------------------------------------- |
+| Language        | **Python 3.11**           | Core backend language                                |
+| Framework       | **FastAPI & Uvicorn**     | High-performance asynchronous REST APIs              |
+| Data Validation | **Pydantic v2**           | Strict schema validation                             |
+| Event Bus       | **Apache Kafka**          | Distributed message streaming broker                 |
+| Caching & State | **Redis 7**               | In-memory decision cache & metrics store             |
+| Vector DB       | **Qdrant**                | High-performance vector database                     |
+| Embeddings      | **Sentence-Transformers** | Local text embedding generation (`all-MiniLM-L6-v2`) |
 
 ### AI & LLM Integration
 
-| Component | Technology | Description |
-|---|---|---|
-| LLM Provider | **Google Gemini API** | Advanced reasoning model |
-| LLM Model | **Gemini 2.5 Flash** | Sub-second risk scoring & explainable reasoning |
+| Component    | Technology            | Description                                     |
+| ------------ | --------------------- | ----------------------------------------------- |
+| LLM Provider | **Google Gemini API** | Advanced reasoning model                        |
+| LLM Model    | **Gemini 2.5 Flash**  | Sub-second risk scoring & explainable reasoning |
 
 ### Infrastructure & Operations
 
-| Component | Technology | Description |
-|---|---|---|
+| Component        | Technology                  | Description                           |
+| ---------------- | --------------------------- | ------------------------------------- |
 | Containerization | **Docker & Docker Compose** | Multi-container service orchestration |
-| Web Server | **Nginx** | Reverse proxy for frontend assets |
+| Web Server       | **Nginx**                   | Reverse proxy for frontend assets     |
 
 ---
 
@@ -243,11 +246,13 @@ DeployGuard Microservices
 ```
 
 ### 1. Gateway Proxy (`gateway/`)
+
 - Ingress gateway for external webhooks.
 - Validates GitHub webhook signatures and payload contracts.
 - Wraps incoming events into standard `DeploymentEvent` schemas and produces them to Kafka.
 
 ### 2. Decision Aggregator (`aggregator/`)
+
 - Central decision engine of DeployGuard.
 - Consumes agent evaluation findings from Kafka topics.
 - Synthesizes risk scores into final decisions (`SAFE`, `REVIEW`, `BLOCK`).
@@ -255,11 +260,13 @@ DeployGuard Microservices
 - Serves REST endpoints for frontend dashboard queries.
 
 ### 3. Repository Context Service (`repository-context-service/`)
+
 - Indexes repository source files, generates line chunks, and computes vector embeddings.
 - Stores vector payloads in Qdrant and caches metadata in Redis.
 - Exposes semantic search endpoints for code lookup and evidence retrieval.
 
 ### 4. AI Risk Agents (`agent-*/`)
+
 - **Code Risk Agent**: Scans pull request title, body, commit message, and modified diffs for security bugs and exposed secrets using Google Gemini API.
 - **Infra Risk Agent**: Scans Kubernetes YAML and Terraform configs for security misconfigurations and root privilege escalations using Google Gemini API.
 - **Incident History Agent**: Computes vector embeddings using `sentence-transformers` and queries Qdrant to find matching historical outages.
@@ -269,9 +276,11 @@ DeployGuard Microservices
 ## API Overview
 
 ### Ingress & Gateway
+
 - `POST /webhook/github` — Webhook ingress endpoint for GitHub push events.
 
 ### Decision & Deployments Aggregator
+
 - `GET /health` — Aggregator health check.
 - `GET /deployments` — Paginated list of deployment evaluation records.
 - `GET /deployments/metrics` — Aggregate pipeline metrics (total, safe, review, blocked, avgRisk, avgConfidence).
@@ -279,12 +288,14 @@ DeployGuard Microservices
 - `GET /agents/status` — Agent fleet health, latency, analysis counts, and confidence averages.
 
 ### Repository Context
+
 - `GET /repository/status/{repo}/{branch}` — Indexing status of a repository branch.
 - `GET /repository/stats/{repo}/{branch}` — File counts and lines of code statistics.
 - `GET /repository/manifest/{repo}/{branch}` — Detected frameworks and last indexed timestamp.
 - `POST /repository/search` — Vector search over indexed codebase chunks.
 
 ### Analytics & Incidents
+
 - `GET /analytics/summary` — High-level DevSecOps analytics statistics.
 - `GET /analytics/volume` — Daily volume time-series metrics.
 - `GET /analytics/decisions` — Decision breakdown distribution percentages.
@@ -368,13 +379,13 @@ docker-compose ps
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `GEMINI_API_KEY` | **Yes** | — | API key for Google Gemini LLM security audits |
-| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model variant to use |
-| `KAFKA_BROKER` | No | `kafka:9092` | Bootstrap address for Kafka broker |
-| `REDIS_URL` | No | `redis://redis:6379/0` | Connection URI for Redis cache |
-| `QDRANT_URL` | No | `http://qdrant:6333` | Connection URL for Qdrant Vector Database |
+| Variable         | Required | Default                | Description                                   |
+| ---------------- | -------- | ---------------------- | --------------------------------------------- |
+| `GEMINI_API_KEY` | **Yes**  | —                      | API key for Google Gemini LLM security audits |
+| `GEMINI_MODEL`   | No       | `gemini-2.5-flash`     | Gemini model variant to use                   |
+| `KAFKA_BROKER`   | No       | `kafka:9092`           | Bootstrap address for Kafka broker            |
+| `REDIS_URL`      | No       | `redis://redis:6379/0` | Connection URI for Redis cache                |
+| `QDRANT_URL`     | No       | `http://qdrant:6333`   | Connection URL for Qdrant Vector Database     |
 
 ---
 
